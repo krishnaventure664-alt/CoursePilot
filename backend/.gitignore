@@ -17,6 +17,7 @@ chroma_db/
 models/
 *.db
 *.db*
+!sparse_index_seed.db
 *.zip
 *.pdf
 

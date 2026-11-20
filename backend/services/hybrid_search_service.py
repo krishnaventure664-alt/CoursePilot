@@ -192,6 +192,53 @@ def hybrid_search(
         })
 
     if not reranker_candidates:
+        # Cloud fallback for pre-indexed courses when local PyTorch model weights are omitted
+        try:
+            import json, re, math
+            from collections import Counter
+            from pathlib import Path
+
+            seed_file = Path(__file__).resolve().parents[1] / "course18_chunks_seed.json"
+            if seed_file.exists():
+                with open(seed_file, "r", encoding="utf-8") as sf:
+                    seed_chunks = json.load(sf)
+
+                q_words = set(re.findall(r"\w+", query.lower()))
+
+                def _score_chunk(doc_text):
+                    doc_words = re.findall(r"\w+", doc_text.lower())
+                    counts = Counter(doc_words)
+                    tot = len(doc_words) or 1
+                    return sum((counts[w] / tot) * (1.0 + math.log(1.0 + counts[w])) for w in q_words if w in counts)
+
+                scored = []
+                for c in seed_chunks:
+                    meta = c.get("metadata", {})
+                    c_course_id = meta.get("course_id")
+                    if str(c_course_id) == str(effective_course_id) or not c_course_id:
+                        s = _score_chunk(c["document"])
+                        if s > 0:
+                            scored.append((c, s))
+
+                scored.sort(key=lambda x: x[1], reverse=True)
+
+                for c, sc in scored[:final_top_k]:
+                    meta = c.get("metadata", {})
+                    reranker_candidates.append({
+                        "chunk_id": c["id"],
+                        "text": c["document"],
+                        "video_id": meta.get("video_id", ""),
+                        "course_id": meta.get("course_id", effective_course_id),
+                        "start": meta.get("start", 0),
+                        "end": meta.get("end", 0),
+                        "rrf_score": sc,
+                        "dense_rank": 1,
+                        "sparse_rank": 1,
+                    })
+        except Exception:
+            pass
+
+    if not reranker_candidates:
         return []
 
     # --------------------------------------------------

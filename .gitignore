@@ -16,6 +16,7 @@ __pycache__/
 backend/chroma_db/
 backend/models/
 backend/*.db*
+!backend/sparse_index_seed.db
 backend/*.zip
 backend/*.pdf
 downloads/
