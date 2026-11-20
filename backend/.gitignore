@@ -1,0 +1,29 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Environment secrets
+.env
+.env.*
+
+# Local databases, backups & model caches
+chroma_db/
+models/
+*.db
+*.db*
+*.zip
+*.pdf
+
+# Audio & temporary downloads
+downloads/
+temp/
+*.mp4
+*.mp3
+*.wav
+*.m4a

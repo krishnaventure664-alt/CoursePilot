@@ -1,0 +1,784 @@
+[
+  {
+    "id": "supported_01",
+    "category": "supported",
+    "language": "english",
+    "expected": "SUPPORTED",
+    "claim": "The Indus Valley Civilization was a Bronze Age civilization.",
+    "evidence_count": 8,
+    "max_entailment": 0.994140625,
+    "top3_entailment_mean": 0.9744466145833334,
+    "weighted_entailment": 0.5405051512308678,
+    "max_contradiction": 0.9599609375,
+    "top3_contradiction_mean": 0.6658935546875,
+    "weighted_contradiction": 0.2200033902786465,
+    "top3_evidence": [
+      {
+        "chunk_id": "SaOK6JkAKBM_chunk_9",
+        "rerank_score": 0.8712569693526405,
+        "entailment": 0.994140625,
+        "contradiction": 0.0014829635620117188
+      },
+      {
+        "chunk_id": "SaOK6JkAKBM_chunk_11",
+        "rerank_score": 0.9809191806086627,
+        "entailment": 0.96533203125,
+        "contradiction": 0.00200653076171875
+      },
+      {
+        "chunk_id": "SaOK6JkAKBM_chunk_10",
+        "rerank_score": 0.9666093980483389,
+        "entailment": 0.9638671875,
+        "contradiction": 0.0100250244140625
+      }
+    ]
+  },
+  {
+    "id": "supported_02",
+    "category": "supported",
+    "language": "english",
+    "expected": "SUPPORTED",
+    "claim": "Gautam Buddha founded Buddhism.",
+    "evidence_count": 8,
+    "max_entailment": 0.97705078125,
+    "top3_entailment_mean": 0.4472452799479167,
+    "weighted_entailment": 0.21311011514388267,
+    "max_contradiction": 0.031463623046875,
+    "top3_contradiction_mean": 0.025349934895833332,
+    "weighted_contradiction": 0.010608573103333116,
+    "top3_evidence": [
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_81",
+        "rerank_score": 0.3524876616396035,
+        "entailment": 0.97705078125,
+        "contradiction": 0.00044536590576171875
+      },
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_90",
+        "rerank_score": 0.4724803364194889,
+        "entailment": 0.284423828125,
+        "contradiction": 0.0022220611572265625
+      },
+      {
+        "chunk_id": "ctm0qxOkeLo_chunk_26",
+        "rerank_score": 0.009848828614980704,
+        "entailment": 0.08026123046875,
+        "contradiction": 0.0279693603515625
+      }
+    ]
+  },
+  {
+    "id": "supported_03",
+    "category": "supported",
+    "language": "hindi",
+    "expected": "SUPPORTED",
+    "claim": "गौतम बुद्ध बौद्ध धर्म के संस्थापक थे।",
+    "evidence_count": 8,
+    "max_entailment": 0.13134765625,
+    "top3_entailment_mean": 0.047637939453125,
+    "weighted_entailment": 0.017136501302785503,
+    "max_contradiction": 0.9912109375,
+    "top3_contradiction_mean": 0.6607742309570312,
+    "weighted_contradiction": 0.21989646670027665,
+    "top3_evidence": [
+      {
+        "chunk_id": "ctm0qxOkeLo_chunk_111",
+        "rerank_score": 0.003678358638553373,
+        "entailment": 0.13134765625,
+        "contradiction": 0.01161956787109375
+      },
+      {
+        "chunk_id": "hCG3rEaNvME_chunk_17",
+        "rerank_score": 0.006612779771126754,
+        "entailment": 0.006755828857421875,
+        "contradiction": 0.9794921875
+      },
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_91",
+        "rerank_score": 0.3430829801766331,
+        "entailment": 0.004810333251953125,
+        "contradiction": 0.0007939338684082031
+      }
+    ]
+  },
+  {
+    "id": "supported_04",
+    "category": "supported",
+    "language": "hinglish",
+    "expected": "SUPPORTED",
+    "claim": "Gautam Buddha Buddhism ke founder the.",
+    "evidence_count": 8,
+    "max_entailment": 0.96826171875,
+    "top3_entailment_mean": 0.7664388020833334,
+    "weighted_entailment": 0.38535305251440205,
+    "max_contradiction": 0.036529541015625,
+    "top3_contradiction_mean": 0.017126719156901043,
+    "weighted_contradiction": 0.00651854400336938,
+    "top3_evidence": [
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_90",
+        "rerank_score": 0.7430287558884106,
+        "entailment": 0.96826171875,
+        "contradiction": 0.0005431175231933594
+      },
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_81",
+        "rerank_score": 0.2933523376470406,
+        "entailment": 0.9580078125,
+        "contradiction": 0.000675201416015625
+      },
+      {
+        "chunk_id": "ctm0qxOkeLo_chunk_26",
+        "rerank_score": 0.0394974953115922,
+        "entailment": 0.373046875,
+        "contradiction": 0.036529541015625
+      }
+    ]
+  },
+  {
+    "id": "unsupported_01",
+    "category": "unsupported",
+    "language": "english",
+    "expected": "INSUFFICIENT",
+    "claim": "Buddhism was founded in 500 BC.",
+    "evidence_count": 8,
+    "max_entailment": 0.004352569580078125,
+    "top3_entailment_mean": 0.0019440650939941406,
+    "weighted_entailment": 0.0009462815185847196,
+    "max_contradiction": 0.498779296875,
+    "top3_contradiction_mean": 0.1694005330403646,
+    "weighted_contradiction": 0.0652207932540145,
+    "top3_evidence": [
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_155",
+        "rerank_score": 0.004645588418190476,
+        "entailment": 0.004352569580078125,
+        "contradiction": 0.498779296875
+      },
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_153",
+        "rerank_score": 0.0005325175207780324,
+        "entailment": 0.0007624626159667969,
+        "contradiction": 0.0026111602783203125
+      },
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_91",
+        "rerank_score": 0.003983633877514902,
+        "entailment": 0.0007171630859375,
+        "contradiction": 0.00537109375
+      }
+    ]
+  },
+  {
+    "id": "unsupported_02",
+    "category": "unsupported",
+    "language": "english",
+    "expected": "INSUFFICIENT",
+    "claim": "The Indus Valley Civilization developed artificial intelligence.",
+    "evidence_count": 8,
+    "max_entailment": 0.0501708984375,
+    "top3_entailment_mean": 0.019766489664713543,
+    "weighted_entailment": 0.008789173894217189,
+    "max_contradiction": 0.9306640625,
+    "top3_contradiction_mean": 0.6070556640625,
+    "weighted_contradiction": 0.2622642736484714,
+    "top3_evidence": [
+      {
+        "chunk_id": "SaOK6JkAKBM_chunk_9",
+        "rerank_score": 0.011612632596739728,
+        "entailment": 0.0501708984375,
+        "contradiction": 0.68701171875
+      },
+      {
+        "chunk_id": "SaOK6JkAKBM_chunk_23",
+        "rerank_score": 0.00418050465768181,
+        "entailment": 0.0047454833984375,
+        "contradiction": 0.9306640625
+      },
+      {
+        "chunk_id": "nlVeEwkbtBU_chunk_26",
+        "rerank_score": 0.03650993261236904,
+        "entailment": 0.004383087158203125,
+        "contradiction": 0.05279541015625
+      }
+    ]
+  },
+  {
+    "id": "unsupported_03",
+    "category": "unsupported",
+    "language": "english",
+    "expected": "INSUFFICIENT",
+    "claim": "The Gupta Empire invented modern computers.",
+    "evidence_count": 8,
+    "max_entailment": 0.0024623870849609375,
+    "top3_entailment_mean": 0.002288818359375,
+    "weighted_entailment": 0.0015107604838829126,
+    "max_contradiction": 0.96533203125,
+    "top3_contradiction_mean": 0.5709635416666666,
+    "weighted_contradiction": 0.25127680581890716,
+    "top3_evidence": [
+      {
+        "chunk_id": "suh-rt-M_4k_chunk_31",
+        "rerank_score": 7.135202950390419e-05,
+        "entailment": 0.0024623870849609375,
+        "contradiction": 0.1107177734375
+      },
+      {
+        "chunk_id": "ANnDGeijnfc_chunk_30",
+        "rerank_score": 6.857565532174144e-05,
+        "entailment": 0.0023403167724609375,
+        "contradiction": 0.475830078125
+      },
+      {
+        "chunk_id": "suh-rt-M_4k_chunk_19",
+        "rerank_score": 0.0004922851050627152,
+        "entailment": 0.002063751220703125,
+        "contradiction": 0.271728515625
+      }
+    ]
+  },
+  {
+    "id": "contradicted_01",
+    "category": "wrong_relationship",
+    "language": "english",
+    "expected": "CONTRADICTED_OR_INSUFFICIENT",
+    "claim": "Bimbisara founded Buddhism.",
+    "evidence_count": 8,
+    "max_entailment": 0.156494140625,
+    "top3_entailment_mean": 0.07381693522135417,
+    "weighted_entailment": 0.035638815086080994,
+    "max_contradiction": 0.99365234375,
+    "top3_contradiction_mean": 0.9300130208333334,
+    "weighted_contradiction": 0.5432698941301343,
+    "top3_evidence": [
+      {
+        "chunk_id": "ctm0qxOkeLo_chunk_26",
+        "rerank_score": 0.19018610052860457,
+        "entailment": 0.156494140625,
+        "contradiction": 0.1702880859375
+      },
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_153",
+        "rerank_score": 0.0002085123712370639,
+        "entailment": 0.034820556640625,
+        "contradiction": 0.150390625
+      },
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_92",
+        "rerank_score": 5.3203133150155674e-05,
+        "entailment": 0.0301361083984375,
+        "contradiction": 0.50830078125
+      }
+    ]
+  },
+  {
+    "id": "contradicted_02",
+    "category": "wrong_relationship",
+    "language": "hindi",
+    "expected": "CONTRADICTED_OR_INSUFFICIENT",
+    "claim": "चंद्रगुप्त मौर्य बौद्ध धर्म के संस्थापक थे।",
+    "evidence_count": 8,
+    "max_entailment": 0.2381591796875,
+    "top3_entailment_mean": 0.09520975748697917,
+    "weighted_entailment": 0.03175465779177068,
+    "max_contradiction": 0.42529296875,
+    "top3_contradiction_mean": 0.15193303426106772,
+    "weighted_contradiction": 0.047750563267050405,
+    "top3_evidence": [
+      {
+        "chunk_id": "hCG3rEaNvME_chunk_17",
+        "rerank_score": 0.0012539290560718477,
+        "entailment": 0.2381591796875,
+        "contradiction": 0.42529296875
+      },
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_153",
+        "rerank_score": 0.004350904812939294,
+        "entailment": 0.036224365234375,
+        "contradiction": 0.006824493408203125
+      },
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_91",
+        "rerank_score": 0.010670567159176466,
+        "entailment": 0.0112457275390625,
+        "contradiction": 0.0016984939575195312
+      }
+    ]
+  },
+  {
+    "id": "entity_01",
+    "category": "entity_relationship",
+    "language": "english",
+    "expected": "CONTRADICTED_OR_INSUFFICIENT",
+    "claim": "Bimbisara was a founder of Buddhism.",
+    "evidence_count": 8,
+    "max_entailment": 0.63134765625,
+    "top3_entailment_mean": 0.24946085611979166,
+    "weighted_entailment": 0.14109345445977436,
+    "max_contradiction": 0.97802734375,
+    "top3_contradiction_mean": 0.7181396484375,
+    "weighted_contradiction": 0.3016566962992093,
+    "top3_evidence": [
+      {
+        "chunk_id": "ctm0qxOkeLo_chunk_26",
+        "rerank_score": 0.5124686767621037,
+        "entailment": 0.63134765625,
+        "contradiction": 0.06317138671875
+      },
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_155",
+        "rerank_score": 0.0006156555082036955,
+        "entailment": 0.065185546875,
+        "contradiction": 0.2193603515625
+      },
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_153",
+        "rerank_score": 0.0011264269006398212,
+        "entailment": 0.051849365234375,
+        "contradiction": 0.08074951171875
+      }
+    ]
+  },
+  {
+    "id": "entity_02",
+    "category": "entity_relationship",
+    "language": "english",
+    "expected": "CONTRADICTED_OR_INSUFFICIENT",
+    "claim": "Gautam Buddha was the founder of Jainism.",
+    "evidence_count": 8,
+    "max_entailment": 0.9091796875,
+    "top3_entailment_mean": 0.3149515787760417,
+    "weighted_entailment": 0.22125318787231743,
+    "max_contradiction": 0.040557861328125,
+    "top3_contradiction_mean": 0.02734375,
+    "weighted_contradiction": 0.012357842411090869,
+    "top3_evidence": [
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_90",
+        "rerank_score": 0.7988062006885338,
+        "entailment": 0.9091796875,
+        "contradiction": 0.0017614364624023438
+      },
+      {
+        "chunk_id": "ctm0qxOkeLo_chunk_26",
+        "rerank_score": 0.005152845293222972,
+        "entailment": 0.0202178955078125,
+        "contradiction": 0.01190185546875
+      },
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_81",
+        "rerank_score": 0.019822146427457586,
+        "entailment": 0.0154571533203125,
+        "contradiction": 0.01050567626953125
+      }
+    ]
+  },
+  {
+    "id": "partial_01",
+    "category": "partially_true",
+    "language": "english",
+    "expected": "INSUFFICIENT",
+    "claim": "The Indus Valley Civilization was a Bronze Age civilization located only in modern-day India.",
+    "evidence_count": 8,
+    "max_entailment": 0.0711669921875,
+    "top3_entailment_mean": 0.03896204630533854,
+    "weighted_entailment": 0.01633338540807018,
+    "max_contradiction": 0.9697265625,
+    "top3_contradiction_mean": 0.8125,
+    "weighted_contradiction": 0.39434108081698377,
+    "top3_evidence": [
+      {
+        "chunk_id": "SaOK6JkAKBM_chunk_9",
+        "rerank_score": 0.05829375421743589,
+        "entailment": 0.0711669921875,
+        "contradiction": 0.72802734375
+      },
+      {
+        "chunk_id": "nlVeEwkbtBU_chunk_26",
+        "rerank_score": 0.07857717448346074,
+        "entailment": 0.03814697265625,
+        "contradiction": 0.219482421875
+      },
+      {
+        "chunk_id": "SaOK6JkAKBM_chunk_10",
+        "rerank_score": 0.2520305044734027,
+        "entailment": 0.007572174072265625,
+        "contradiction": 0.04986572265625
+      }
+    ]
+  },
+  {
+    "id": "partial_02",
+    "category": "partially_true",
+    "language": "english",
+    "expected": "INSUFFICIENT",
+    "claim": "Gautam Buddha founded Buddhism and Jainism.",
+    "evidence_count": 8,
+    "max_entailment": 0.78271484375,
+    "top3_entailment_mean": 0.2643025716145833,
+    "weighted_entailment": 0.20314970631365756,
+    "max_contradiction": 0.01219940185546875,
+    "top3_contradiction_mean": 0.009642283121744791,
+    "weighted_contradiction": 0.0048182232914561465,
+    "top3_evidence": [
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_90",
+        "rerank_score": 0.9105091150417751,
+        "entailment": 0.78271484375,
+        "contradiction": 0.0010547637939453125
+      },
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_81",
+        "rerank_score": 0.05012429160244788,
+        "entailment": 0.00603485107421875,
+        "contradiction": 0.0024204254150390625
+      },
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_91",
+        "rerank_score": 0.05326083323979654,
+        "entailment": 0.00415802001953125,
+        "contradiction": 0.01007080078125
+      }
+    ]
+  },
+  {
+    "id": "negation_01",
+    "category": "negation",
+    "language": "english",
+    "expected": "CONTRADICTED",
+    "claim": "Gautam Buddha did not found Buddhism.",
+    "evidence_count": 8,
+    "max_entailment": 0.0004589557647705078,
+    "top3_entailment_mean": 0.00035945574442545575,
+    "weighted_entailment": 0.00025792739405897314,
+    "max_contradiction": 0.99853515625,
+    "top3_contradiction_mean": 0.9969075520833334,
+    "weighted_contradiction": 0.9864354499840507,
+    "top3_evidence": [
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_91",
+        "rerank_score": 0.045489622820177454,
+        "entailment": 0.0004589557647705078,
+        "contradiction": 0.96826171875
+      },
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_155",
+        "rerank_score": 0.005908514021148315,
+        "entailment": 0.0003304481506347656,
+        "contradiction": 0.99462890625
+      },
+      {
+        "chunk_id": "ctm0qxOkeLo_chunk_26",
+        "rerank_score": 0.0016031776985909953,
+        "entailment": 0.00028896331787109375,
+        "contradiction": 0.9853515625
+      }
+    ]
+  },
+  {
+    "id": "negation_02",
+    "category": "negation",
+    "language": "english",
+    "expected": "CONTRADICTED",
+    "claim": "The Indus Valley Civilization was not a Bronze Age civilization.",
+    "evidence_count": 8,
+    "max_entailment": 0.026214599609375,
+    "top3_entailment_mean": 0.016825358072916668,
+    "weighted_entailment": 0.007389380640376718,
+    "max_contradiction": 0.998046875,
+    "top3_contradiction_mean": 0.9951171875,
+    "weighted_contradiction": 0.9439805172262122,
+    "top3_evidence": [
+      {
+        "chunk_id": "SaOK6JkAKBM_chunk_49",
+        "rerank_score": 0.17731987089862478,
+        "entailment": 0.026214599609375,
+        "contradiction": 0.71142578125
+      },
+      {
+        "chunk_id": "nlVeEwkbtBU_chunk_26",
+        "rerank_score": 0.2517965951399989,
+        "entailment": 0.01340484619140625,
+        "contradiction": 0.927734375
+      },
+      {
+        "chunk_id": "SaOK6JkAKBM_chunk_1",
+        "rerank_score": 0.5217401876633349,
+        "entailment": 0.01085662841796875,
+        "contradiction": 0.89697265625
+      }
+    ]
+  },
+  {
+    "id": "date_01",
+    "category": "date_number",
+    "language": "english",
+    "expected": "INSUFFICIENT",
+    "claim": "Gautam Buddha founded Buddhism in exactly 500 BC.",
+    "evidence_count": 8,
+    "max_entailment": 0.0036296844482421875,
+    "top3_entailment_mean": 0.0016981760660807292,
+    "weighted_entailment": 0.0008893078500985015,
+    "max_contradiction": 0.195556640625,
+    "top3_contradiction_mean": 0.077728271484375,
+    "weighted_contradiction": 0.03402045297334856,
+    "top3_evidence": [
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_155",
+        "rerank_score": 0.023032687203540146,
+        "entailment": 0.0036296844482421875,
+        "contradiction": 0.195556640625
+      },
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_91",
+        "rerank_score": 0.024693819038020468,
+        "entailment": 0.0007653236389160156,
+        "contradiction": 0.0178680419921875
+      },
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_153",
+        "rerank_score": 0.003566519474375871,
+        "entailment": 0.0006995201110839844,
+        "contradiction": 0.0197601318359375
+      }
+    ]
+  },
+  {
+    "id": "date_02",
+    "category": "date_number",
+    "language": "english",
+    "expected": "INSUFFICIENT",
+    "claim": "The Indus Valley Civilization existed for exactly 100 years.",
+    "evidence_count": 8,
+    "max_entailment": 0.0024471282958984375,
+    "top3_entailment_mean": 0.0012793540954589844,
+    "weighted_entailment": 0.0006542864265860705,
+    "max_contradiction": 0.059234619140625,
+    "top3_contradiction_mean": 0.03159332275390625,
+    "weighted_contradiction": 0.013412003177400681,
+    "top3_evidence": [
+      {
+        "chunk_id": "SaOK6JkAKBM_chunk_9",
+        "rerank_score": 0.013153356014758755,
+        "entailment": 0.0024471282958984375,
+        "contradiction": 0.0296173095703125
+      },
+      {
+        "chunk_id": "SaOK6JkAKBM_chunk_23",
+        "rerank_score": 0.010171366680046498,
+        "entailment": 0.0008807182312011719,
+        "contradiction": 0.059234619140625
+      },
+      {
+        "chunk_id": "SaOK6JkAKBM_chunk_10",
+        "rerank_score": 0.012096008922360771,
+        "entailment": 0.0005102157592773438,
+        "contradiction": 0.00592803955078125
+      }
+    ]
+  },
+  {
+    "id": "multi_01",
+    "category": "multilingual",
+    "language": "hindi",
+    "expected": "SUPPORTED",
+    "claim": "सिंधु घाटी सभ्यता कांस्य युग की सभ्यता थी।",
+    "evidence_count": 8,
+    "max_entailment": 0.01751708984375,
+    "top3_entailment_mean": 0.007328033447265625,
+    "weighted_entailment": 0.003693227476820352,
+    "max_contradiction": 0.5732421875,
+    "top3_contradiction_mean": 0.19362767537434897,
+    "weighted_contradiction": 0.08965982308868548,
+    "top3_evidence": [
+      {
+        "chunk_id": "SaOK6JkAKBM_chunk_1",
+        "rerank_score": 0.3622098187441062,
+        "entailment": 0.01751708984375,
+        "contradiction": 0.5732421875
+      },
+      {
+        "chunk_id": "SaOK6JkAKBM_chunk_10",
+        "rerank_score": 0.15086728979542094,
+        "entailment": 0.002277374267578125,
+        "contradiction": 0.00444793701171875
+      },
+      {
+        "chunk_id": "nlVeEwkbtBU_chunk_26",
+        "rerank_score": 0.14956177778471397,
+        "entailment": 0.00218963623046875,
+        "contradiction": 0.0013990402221679688
+      }
+    ]
+  },
+  {
+    "id": "multi_02",
+    "category": "multilingual",
+    "language": "hinglish",
+    "expected": "SUPPORTED",
+    "claim": "Indus Valley Civilization ek Bronze Age civilization thi.",
+    "evidence_count": 8,
+    "max_entailment": 0.99560546875,
+    "top3_entailment_mean": 0.9781901041666666,
+    "weighted_entailment": 0.5979347371805176,
+    "max_contradiction": 0.88623046875,
+    "top3_contradiction_mean": 0.5851236979166666,
+    "weighted_contradiction": 0.20091737798690557,
+    "top3_evidence": [
+      {
+        "chunk_id": "SaOK6JkAKBM_chunk_9",
+        "rerank_score": 0.8524978896939384,
+        "entailment": 0.99560546875,
+        "contradiction": 0.0011281967163085938
+      },
+      {
+        "chunk_id": "SaOK6JkAKBM_chunk_10",
+        "rerank_score": 0.9389022119687799,
+        "entailment": 0.98828125,
+        "contradiction": 0.0030727386474609375
+      },
+      {
+        "chunk_id": "SaOK6JkAKBM_chunk_11",
+        "rerank_score": 0.9494751366124826,
+        "entailment": 0.95068359375,
+        "contradiction": 0.00289154052734375
+      }
+    ]
+  },
+  {
+    "id": "multi_03",
+    "category": "multilingual",
+    "language": "hindi",
+    "expected": "CONTRADICTED_OR_INSUFFICIENT",
+    "claim": "बिंबिसार बौद्ध धर्म के संस्थापक थे।",
+    "evidence_count": 8,
+    "max_entailment": 0.919921875,
+    "top3_entailment_mean": 0.3193766276041667,
+    "weighted_entailment": 0.12345521843549281,
+    "max_contradiction": 0.006137847900390625,
+    "top3_contradiction_mean": 0.00525665283203125,
+    "weighted_contradiction": 0.0027655815379396902,
+    "top3_evidence": [
+      {
+        "chunk_id": "hCG3rEaNvME_chunk_17",
+        "rerank_score": 0.0016582585103608605,
+        "entailment": 0.919921875,
+        "contradiction": 0.006137847900390625
+      },
+      {
+        "chunk_id": "ctm0qxOkeLo_chunk_112",
+        "rerank_score": 0.005368974057780858,
+        "entailment": 0.0209503173828125,
+        "contradiction": 0.0023746490478515625
+      },
+      {
+        "chunk_id": "ctm0qxOkeLo_chunk_111",
+        "rerank_score": 0.001208387988041619,
+        "entailment": 0.0172576904296875,
+        "contradiction": 0.0004451274871826172
+      }
+    ]
+  },
+  {
+    "id": "irrelevant_01",
+    "category": "irrelevant",
+    "language": "english",
+    "expected": "INSUFFICIENT",
+    "claim": "Python is a programming language.",
+    "evidence_count": 8,
+    "max_entailment": 0.0268402099609375,
+    "top3_entailment_mean": 0.01534271240234375,
+    "weighted_entailment": 0.007873243112500802,
+    "max_contradiction": 0.998046875,
+    "top3_contradiction_mean": 0.9830729166666666,
+    "weighted_contradiction": 0.7314896220282273,
+    "top3_evidence": [
+      {
+        "chunk_id": "SaOK6JkAKBM_chunk_1",
+        "rerank_score": 3.1603736450459035e-05,
+        "entailment": 0.0268402099609375,
+        "contradiction": 0.166748046875
+      },
+      {
+        "chunk_id": "SaOK6JkAKBM_chunk_2",
+        "rerank_score": 7.361106303176225e-05,
+        "entailment": 0.0098419189453125,
+        "contradiction": 0.80859375
+      },
+      {
+        "chunk_id": "SaOK6JkAKBM_chunk_9",
+        "rerank_score": 0.0004258823381704838,
+        "entailment": 0.00934600830078125,
+        "contradiction": 0.97607421875
+      }
+    ]
+  },
+  {
+    "id": "irrelevant_02",
+    "category": "irrelevant",
+    "language": "english",
+    "expected": "INSUFFICIENT",
+    "claim": "Quantum computers use quantum mechanical phenomena.",
+    "evidence_count": 8,
+    "max_entailment": 0.046875,
+    "top3_entailment_mean": 0.041615804036458336,
+    "weighted_entailment": 0.02431559265923022,
+    "max_contradiction": 0.5380859375,
+    "top3_contradiction_mean": 0.3870442708333333,
+    "weighted_contradiction": 0.2035940587714089,
+    "top3_evidence": [
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_153",
+        "rerank_score": 1.6520517224919698e-05,
+        "entailment": 0.046875,
+        "contradiction": 0.12469482421875
+      },
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_155",
+        "rerank_score": 1.602648065529534e-05,
+        "entailment": 0.039947509765625,
+        "contradiction": 0.336181640625
+      },
+      {
+        "chunk_id": "G1mcwl4Kz34_chunk_91",
+        "rerank_score": 1.986607773809049e-05,
+        "entailment": 0.03802490234375,
+        "contradiction": 0.09796142578125
+      }
+    ]
+  },
+  {
+    "id": "irrelevant_03",
+    "category": "irrelevant",
+    "language": "english",
+    "expected": "INSUFFICIENT",
+    "claim": "The capital of France is Paris.",
+    "evidence_count": 8,
+    "max_entailment": 0.01230621337890625,
+    "top3_entailment_mean": 0.008570353190104166,
+    "weighted_entailment": 0.003757553334405622,
+    "max_contradiction": 0.99853515625,
+    "top3_contradiction_mean": 0.9466145833333334,
+    "weighted_contradiction": 0.5626977406465209,
+    "top3_evidence": [
+      {
+        "chunk_id": "suh-rt-M_4k_chunk_31",
+        "rerank_score": 0.000864009475754489,
+        "entailment": 0.01230621337890625,
+        "contradiction": 0.0309906005859375
+      },
+      {
+        "chunk_id": "suh-rt-M_4k_chunk_19",
+        "rerank_score": 0.002408156786092816,
+        "entailment": 0.007755279541015625,
+        "contradiction": 0.80615234375
+      },
+      {
+        "chunk_id": "suh-rt-M_4k_chunk_40",
+        "rerank_score": 0.00041667874503516526,
+        "entailment": 0.005649566650390625,
+        "contradiction": 0.056884765625
+      }
+    ]
+  }
+]

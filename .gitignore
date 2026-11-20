@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+.pnp
+.pnp.*
+
+# Python environments
+venv/
+.venv/
+backend/venv/
+hhem_venv/
+__pycache__/
+*.py[cod]
+
+# Local databases, backups & weights
+backend/chroma_db/
+backend/models/
+backend/*.db*
+backend/*.zip
+backend/*.pdf
+downloads/
+
+# Environment secrets (Never commit secrets to GitHub)
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env.local
+
+# Next.js build output
+frontend/.next/
+frontend/out/
+frontend/build/
+
+# Scratch & temporary test scripts
+scratch/
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
