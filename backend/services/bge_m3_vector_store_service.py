@@ -7,8 +7,10 @@ client = chromadb.PersistentClient(
 )
 
 collection = client.get_or_create_collection(
-    name="course_chunks_bge_m3_v1"
+    name="course_chunks_gemini_v1"
 )
+
+
 def store_dense_chunk(
     chunk_id,
     text,
