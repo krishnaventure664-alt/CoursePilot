@@ -13,11 +13,11 @@ load_dotenv("backend/.env")
 logger = logging.getLogger(__name__)
 
 GEMINI_MODELS = [
-    "gemini-3-flash-preview",
-    "gemini-3.1-flash-lite-preview",
-    "gemini-3.1-flash-lite",
     "gemini-flash-lite-latest",
+    "gemini-3.1-flash-lite",
+    "gemini-3.1-flash-lite-preview",
     "gemini-2.5-flash",
+    "gemini-3-flash-preview",
 ]
 
 
@@ -111,12 +111,15 @@ def upload_audio_to_gemini(file_path: str, api_key: str) -> dict | None:
     Returns dict with 'uri' and 'name' (for later deletion).
     """
     f_size = os.path.getsize(file_path)
+    ext = os.path.splitext(file_path)[1].lower().lstrip(".")
+    mime_type = "audio/webm" if ext == "webm" else ("audio/mp4" if ext in ["m4a", "mp4"] else "audio/mp3")
+
     upload_url = f"https://generativelanguage.googleapis.com/upload/v1beta/files?key={api_key}"
     headers = {
         "X-Goog-Upload-Protocol": "resumable",
         "X-Goog-Upload-Command": "start",
         "X-Goog-Upload-Header-Content-Length": str(f_size),
-        "X-Goog-Upload-Header-Content-Type": "audio/mp3",
+        "X-Goog-Upload-Header-Content-Type": mime_type,
         "Content-Type": "application/json",
     }
 
@@ -379,6 +382,23 @@ def transcribe_audio_file_with_gemini(
             os.rmdir(temp_dir)
     except OSError:
         pass
+
+    if not all_segments:
+        # Fallback: direct upload of full audio file to Gemini File API
+        try:
+            logger.info("Slicing produced 0 segments, attempting direct upload of full audio to Gemini...")
+            file_meta = upload_audio_to_gemini(audio_path, api_key)
+            if file_meta:
+                f_uri = file_meta.get("uri")
+                f_name = file_meta.get("name")
+                try:
+                    direct_segs = transcribe_audio_slice(f_uri, api_key, time_offset=0.0, video_title=video_title)
+                    if direct_segs:
+                        all_segments = direct_segs
+                finally:
+                    delete_gemini_file(f_name, api_key)
+        except Exception as direct_err:
+            logger.warning(f"Direct Gemini transcription failed: {direct_err}")
 
     # Sort all segments chronologically
     all_segments.sort(key=lambda x: x["start"])

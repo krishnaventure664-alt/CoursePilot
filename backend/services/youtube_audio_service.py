@@ -33,14 +33,37 @@ def download_audio(video_id: str) -> str:
     # 2. Download highest quality audio directly into DOWNLOADS_DIR
     video_url = f"https://www.youtube.com/watch?v={video_id}"
     out_template = os.path.join(DOWNLOADS_DIR, "%(id)s.%(ext)s")
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "outtmpl": out_template,
-        "quiet": True,
-        "no_warnings": True,
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.extract_info(video_url, download=True)
+    
+    # Try multiple player clients to bypass datacenter IP restrictions
+    client_configs = [
+        ["android", "mweb"],
+        ["ios"],
+        ["mweb"],
+        ["web"],
+    ]
+
+    download_success = False
+    for clients in client_configs:
+        try:
+            ydl_opts = {
+                "format": "bestaudio/best",
+                "outtmpl": out_template,
+                "quiet": True,
+                "no_warnings": True,
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": clients,
+                    }
+                },
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.extract_info(video_url, download=True)
+            existing = get_existing_audio_path(video_id)
+            if existing:
+                download_success = True
+                return existing
+        except Exception:
+            continue
 
     existing = get_existing_audio_path(video_id)
     if existing:
