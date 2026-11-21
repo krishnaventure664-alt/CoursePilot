@@ -48,10 +48,10 @@ logger = logging.getLogger(__name__)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
 GEMINI_MODELS = [
+    "gemini-2.5-flash",
     "gemini-flash-lite-latest",
     "gemini-3.1-flash-lite",
     "gemini-3.1-flash-lite-preview",
-    "gemini-2.5-flash",
     "gemini-3-flash-preview",
 ]
 
@@ -193,7 +193,7 @@ def _call_gemini(prompt: str, system_instruction: str = "", max_output_tokens: i
 
             try:
 
-                res = http_session.post(url, json=payload, timeout=30)
+                res = http_session.post(url, json=payload, timeout=15)
 
                 if res.status_code == 200:
 
@@ -257,7 +257,7 @@ def _call_gemini(prompt: str, system_instruction: str = "", max_output_tokens: i
 
                             cont_payload["system_instruction"] = {"parts": [{"text": system_instruction}]}
 
-                        c_res = http_session.post(url, json=cont_payload, timeout=30)
+                        c_res = http_session.post(url, json=cont_payload, timeout=15)
 
                         if c_res.status_code == 200:
 
@@ -311,27 +311,113 @@ def invalidate_lecture_chunks_cache(course_id: int | None = None, video_id: str 
             for k in keys_to_del:
                 _lecture_chunks_cache.pop(k, None)
 
+def _split_markdown_into_chunks(content: str, total_duration: float = 3600.0) -> list[tuple[float, float, str]]:
+    """Splits markdown notes into substantial, cohesive technical chunks without isolated headers."""
+    if not content:
+        return []
+    import re
+    raw_sections = re.split(r'(?=\n#{1,4}\s+)', content)
+    merged_sections = []
+    buffer = ""
+    for sec in raw_sections:
+        s = sec.strip()
+        if not s:
+            continue
+        # Merge short headers (< 250 chars) into the subsequent body section
+        if len(s) < 250:
+            if buffer:
+                buffer += "\n\n" + s
+            else:
+                buffer = s
+        else:
+            if buffer:
+                merged_sections.append(buffer + "\n\n" + s)
+                buffer = ""
+            else:
+                merged_sections.append(s)
+    if buffer:
+        if merged_sections:
+            merged_sections[-1] += "\n\n" + buffer
+        else:
+            merged_sections.append(buffer)
+
+    final_sections = []
+    for sec in merged_sections:
+        if len(sec) > 3000:
+            paras = sec.split("\n\n")
+            p_buf = ""
+            for p in paras:
+                if len(p_buf) + len(p) > 2000 and len(p_buf) >= 400:
+                    final_sections.append(p_buf.strip())
+                    p_buf = p
+                else:
+                    p_buf = (p_buf + "\n\n" + p).strip()
+            if p_buf:
+                final_sections.append(p_buf.strip())
+        else:
+            final_sections.append(sec)
+
+    dur = max(3600.0, total_duration)
+    n = max(1, len(final_sections))
+    step = dur / n
+    chunks = []
+    for i, sec in enumerate(final_sections):
+        start = i * step
+        end = (i + 1) * step
+        chunks.append((start, end, sec))
+    return chunks
+
+
 def _get_lecture_chunks(course_id: int, video_id: str | None = None) -> list[tuple[float, float, str]]:
     """Fetch all indexed chunks with timestamps, sorted chronologically from 0:00 to end with 0ms in-memory cache."""
     try:
-        from services.course_db_service import get_canonical_course_id
+        from services.course_db_service import get_canonical_course_id, get_connection
         effective_course_id = get_canonical_course_id(course_id)
         cache_key = (effective_course_id, video_id)
         with _chunks_cache_lock:
             if cache_key in _lecture_chunks_cache:
                 return _lecture_chunks_cache[cache_key]
 
+        chunks = []
+
+        # 1. Fetch high-grade detailed notes from SQLite if available
+        note_content = ""
+        try:
+            with get_connection() as conn:
+                if video_id:
+                    row = conn.execute("SELECT content FROM video_detailed_notes WHERE course_id = ? AND video_id = ?", (effective_course_id, video_id)).fetchone()
+                    if not row or not row["content"]:
+                        row = conn.execute("SELECT content FROM video_notes WHERE course_id = ? AND video_id = ?", (effective_course_id, video_id)).fetchone()
+                    note_content = row["content"] if row else ""
+                else:
+                    rows = conn.execute("SELECT content FROM video_detailed_notes WHERE course_id = ? ORDER BY id ASC", (effective_course_id,)).fetchall()
+                    if not rows:
+                        rows = conn.execute("SELECT content FROM video_notes WHERE course_id = ? ORDER BY id ASC", (effective_course_id,)).fetchall()
+                    note_content = "\n\n".join(r["content"] for r in rows if r["content"])
+        except Exception:
+            pass
+
+        # 2. Query ChromaDB collection
         where = {"video_id": video_id} if video_id else {"course_id": effective_course_id}
         results = collection.get(where=where, include=["documents", "metadatas"])
         documents = results.get("documents", [])
         metadatas = results.get("metadatas", [])
-        chunks = []
+        chroma_chunks = []
         if documents:
             for doc, meta in zip(documents, metadatas):
                 start = meta.get("start", 0.0) if meta else 0.0
                 end = meta.get("end", start + 60.0) if meta else start + 60.0
-                chunks.append((start, end, doc))
-            chunks.sort(key=lambda x: x[0])
+                chroma_chunks.append((start, end, doc))
+            chroma_chunks.sort(key=lambda x: x[0])
+
+        chroma_len = sum(len(c[2]) for c in chroma_chunks)
+        # Prioritize master detailed notes whenever Chroma has too few chunks or far less content
+        if chroma_chunks and len(chroma_chunks) >= 6 and chroma_len >= 2000 and (len(note_content) <= chroma_len + 500):
+            chunks = chroma_chunks
+        elif note_content:
+            chunks = _split_markdown_into_chunks(note_content, total_duration=max(3600.0, float(len(chroma_chunks) * 60)))
+        else:
+            chunks = chroma_chunks
 
         if not chunks:
             try:
@@ -350,24 +436,30 @@ def _get_lecture_chunks(course_id: int, video_id: str | None = None) -> list[tup
             except Exception:
                 pass
 
-        if not chunks:
-            try:
-                from services.course_db_service import get_connection
-                import re
-                with get_connection() as conn:
-                    if video_id:
-                        row = conn.execute("SELECT content FROM video_detailed_notes WHERE course_id = ? AND video_id = ?", (effective_course_id, video_id)).fetchone()
-                        if not row or not row["content"]:
-                            row = conn.execute("SELECT content FROM video_notes WHERE course_id = ? AND video_id = ?", (effective_course_id, video_id)).fetchone()
-                        content = row["content"] if row else ""
-                        if content:
-                            secs = re.split(r"(?=\n###?\s+)", content)
-                            for s_idx, sec in enumerate(secs):
-                                s_str = sec.strip()
-                                if len(s_str) >= 40:
-                                    chunks.append((s_idx * 60.0, (s_idx + 1) * 60.0, s_str))
-            except Exception:
-                pass
+        # Clean chunks: merge any residual chunk < 250 chars into adjacent chunk so no isolated header chunk remains
+        clean_chunks = []
+        buf_c = None
+        for c in chunks:
+            c_text = c[2].strip()
+            if len(c_text) < 250:
+                if buf_c:
+                    buf_c = (buf_c[0], c[1], buf_c[2] + "\n\n" + c_text)
+                else:
+                    buf_c = c
+            else:
+                if buf_c:
+                    clean_chunks.append((buf_c[0], c[1], buf_c[2] + "\n\n" + c_text))
+                    buf_c = None
+                else:
+                    clean_chunks.append(c)
+        if buf_c:
+            if clean_chunks:
+                clean_chunks[-1] = (clean_chunks[-1][0], buf_c[1], clean_chunks[-1][2] + "\n\n" + buf_c[2])
+            else:
+                clean_chunks.append(buf_c)
+
+        chunks = clean_chunks if clean_chunks else chunks
+
         with _chunks_cache_lock:
             if len(_lecture_chunks_cache) > 150:
                 _lecture_chunks_cache.pop(next(iter(_lecture_chunks_cache)))
@@ -376,7 +468,6 @@ def _get_lecture_chunks(course_id: int, video_id: str | None = None) -> list[tup
     except Exception as e:
         logger.error("Failed to retrieve chunks: %s", e)
         return []
-
 
 def _get_lecture_text(course_id: int, video_id: str | None = None) -> str:
 
@@ -670,14 +761,13 @@ No markdown code fences, raw JSON only."""
         return {"quiz": [], "set_index": 1, "total_sets": 1, "all_covered": False, "message": "No lecture content found."}
 
     total_dur = chunks[-1][1] - chunks[0][0] if chunks else 0.0
-    if total_dur <= 1200.0:
-        total_sets = 2
-    elif total_dur <= 3600.0:
-        total_sets = 3
-    elif total_dur <= 7200.0:
+    # Guarantee at least 4 progressive sets for all lectures
+    if len(chunks) <= 4:
+        total_sets = max(2, len(chunks))
+    elif len(chunks) <= 8:
         total_sets = 4
     else:
-        total_sets = max(4, min(12, int(total_dur / 3600)))
+        total_sets = max(4, min(8, len(chunks) // 2))
 
     all_covered = False
     message = ""
@@ -765,7 +855,8 @@ No markdown code fences, raw JSON only."""
             "2. ZERO OUTSIDE ADDITIONS: Do NOT introduce external textbook questions, facts, or proofs.\n"
             "3. EXPLANATION GROUNDING: In the 'explanation' field, cite the instructor's reasoning from the lecture.\n"
             "4. MANDATORY ENGLISH LANGUAGE: All questions, answer options, and explanations MUST be written 100% in clear, fluent English. Even if the lecture is spoken in Hindi, Hinglish, or another regional language, translate and phrase all concepts, questions, choices, and explanations strictly in standard English. NEVER use Hindi or Devanagari script.\n"
-            "5. NO LATEX: Use clean Unicode.\n\n"
+                        "5. NO LATEX: Use clean Unicode.\n"
+            "6. ZERO METADATA / HEADING QUESTIONS: ABSOLUTELY NEVER ask questions about headings, unit titles, document names, syllabus structure, or section names (e.g. NEVER ask 'What is the title of Unit 1?' or 'What section follows this header?'). Every question MUST test concrete technical knowledge, protocol mechanisms, definitions, formulas, frame formats, packet routing, architectural layers, or real calculations taught in this section.\n\n"
             "Return ONLY a valid JSON array of 5 objects with exact fields:\n"
             "- 'id': (integer 1-5)\n"
             "- 'question': (string)\n"
@@ -858,14 +949,13 @@ No markdown code fences, raw JSON only."""
         return {"flashcards": [], "set_index": 1, "total_sets": 1, "all_covered": False, "message": "No lecture content found."}
 
     total_dur = chunks[-1][1] - chunks[0][0] if chunks else 0.0
-    if total_dur <= 1200.0:
-        total_sets = 2
-    elif total_dur <= 3600.0:
-        total_sets = 3
-    elif total_dur <= 7200.0:
+    # Guarantee at least 4 progressive sets for all lectures
+    if len(chunks) <= 4:
+        total_sets = max(2, len(chunks))
+    elif len(chunks) <= 8:
         total_sets = 4
     else:
-        total_sets = max(4, min(12, int(total_dur / 3600)))
+        total_sets = max(4, min(8, len(chunks) // 2))
 
     all_covered = False
     message = ""
@@ -945,7 +1035,8 @@ No markdown code fences, raw JSON only."""
             "2. ZERO OUTSIDE ADDITIONS: Do NOT pull trivia or facts from external sources.\n"
             "3. ACCURATE CATEGORIES: Categorize each card according to subject matter (e.g. 'Definition', 'Core Concept', 'Formula & Derivation', 'Instructor Tip').\n"
             "4. MANDATORY ENGLISH LANGUAGE: All flashcards (front, back, and category) MUST be written 100% in clear, fluent English. Even if the lecture is spoken in Hindi, Hinglish, or another regional language, translate and express all terms, concepts, questions, and explanations strictly in standard English. NEVER use Hindi or Devanagari script.\n"
-            "5. NO LATEX: Use clean Unicode.\n\n"
+                        "5. NO LATEX: Use clean Unicode.\n"
+            "6. ZERO METADATA / HEADING CARDS: ABSOLUTELY NEVER create flashcards about headings, unit titles, document names, or syllabus structure. Every card MUST test concrete technical definitions, protocol functions, mathematical formulas, network parameters, or exam principles.\n\n"
             "Return ONLY a valid JSON array of 6 to 8 objects with exact fields:\n"
             "- 'front': (string, clear question or term)\n"
             "- 'back': (string, accurate concise answer)\n"

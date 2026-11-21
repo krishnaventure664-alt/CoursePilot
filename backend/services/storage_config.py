@@ -21,10 +21,23 @@ elif SQLITE_DB_PATH.exists() and SEED_DB_PATH.exists():
             courses_to_sync = []
             seed_courses = seed_conn.execute("SELECT id FROM courses").fetchall()
             for (cid,) in seed_courses:
-                s_count = seed_conn.execute("SELECT count(*) FROM course_videos WHERE course_id = ?", (cid,)).fetchone()[0]
-                l_count_row = live_conn.execute("SELECT count(*) FROM course_videos WHERE course_id = ?", (cid,)).fetchone()
-                l_count = l_count_row[0] if l_count_row else 0
-                if l_count < s_count or l_count == 0:
+                s_vcount = seed_conn.execute("SELECT count(*) FROM course_videos WHERE course_id = ?", (cid,)).fetchone()[0]
+                l_vcount_row = live_conn.execute("SELECT count(*) FROM course_videos WHERE course_id = ?", (cid,)).fetchone()
+                l_vcount = l_vcount_row[0] if l_vcount_row else 0
+                
+                s_qcount = seed_conn.execute("SELECT count(*) FROM course_quizzes WHERE course_id = ?", (cid,)).fetchone()[0]
+                l_qcount_row = live_conn.execute("SELECT count(*) FROM course_quizzes WHERE course_id = ?", (cid,)).fetchone()
+                l_qcount = l_qcount_row[0] if l_qcount_row else 0
+
+                s_fcount = seed_conn.execute("SELECT count(*) FROM course_flashcards WHERE course_id = ?", (cid,)).fetchone()[0]
+                l_fcount_row = live_conn.execute("SELECT count(*) FROM course_flashcards WHERE course_id = ?", (cid,)).fetchone()
+                l_fcount = l_fcount_row[0] if l_fcount_row else 0
+
+                s_dlen = seed_conn.execute("SELECT sum(length(content)) FROM video_detailed_notes WHERE course_id = ?", (cid,)).fetchone()[0] or 0
+                l_dlen_row = live_conn.execute("SELECT sum(length(content)) FROM video_detailed_notes WHERE course_id = ?", (cid,)).fetchone()
+                l_dlen = (l_dlen_row[0] or 0) if l_dlen_row else 0
+
+                if l_vcount < s_vcount or l_qcount < s_qcount or l_fcount < s_fcount or l_dlen < s_dlen or l_vcount == 0:
                     courses_to_sync.append(cid)
 
             if courses_to_sync:
