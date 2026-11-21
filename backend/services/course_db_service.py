@@ -274,7 +274,6 @@ def clear_flashcards(course_id: int, video_id: str | None = None, set_index: int
                 conn.execute("DELETE FROM course_flashcards WHERE course_id = ? AND set_index = ?", (course_id, set_index))
             else:
                 conn.execute("DELETE FROM course_flashcards WHERE course_id = ?", (course_id,))
-        conn.execute("DELETE FROM course_answers WHERE course_id = ?", (course_id,))
 
 
 def save_flashcards(course_id: int, video_id: str | None, cards: list[dict], set_index: int = 0):

@@ -6,7 +6,10 @@ import logging
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
-import ollama
+try:
+    import ollama
+except ImportError:
+    ollama = None
 
 http_session = requests.Session()
 adapter = HTTPAdapter(
@@ -39,16 +42,16 @@ OLLAMA_MODEL = "qwen2.5:3b"
 FALLBACK_ANSWER = (
     "I could not find enough information about this in the provided course content."
 )
-RELEVANCE_THRESHOLD = 0.025
+RELEVANCE_THRESHOLD = 0.01
 
 # Verified active production models prioritized by low-latency response speed
 GEMINI_MODELS = [
-    "gemini-2.0-flash",
-    "gemini-flash-lite-latest",
     "gemini-2.5-flash",
+    "gemini-flash-latest",
     "gemini-2.5-flash-lite",
-    "gemini-3-flash-preview",
-    "gemini-3.1-flash-lite-preview",
+    "gemini-flash-lite-latest",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash",
 ]
 
 
@@ -303,7 +306,7 @@ def generate_answer(question: str, course_id: int) -> dict:
         if not search_results or search_results[0].get("rerank_score", 0.0) < RELEVANCE_THRESHOLD:
             return {"answer": FALLBACK_ANSWER, "sources": []}
 
-        valid_chunks = [c for c in search_results if c.get("rerank_score", 0.0) >= 0.08]
+        valid_chunks = [c for c in search_results if c.get("rerank_score", 0.0) >= 0.01]
         if not valid_chunks:
             valid_chunks = search_results[:4]
 
@@ -331,23 +334,26 @@ def generate_answer(question: str, course_id: int) -> dict:
                 return res_payload
 
         # 6. Local Ollama fallback (with repeat_penalty to eliminate Hinglish repetition loops)
-        try:
-            response = ollama.chat(
-                model=OLLAMA_MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                options={
-                    "temperature": 0.2,
-                    "repeat_penalty": 1.25,
-                    "num_ctx": 4096,
-                    "num_predict": 700,
-                },
-            )
-            answer = response["message"]["content"].strip()
-        except Exception as error:
-            logger.exception("Ollama generation failed: %s", error)
+        if ollama is not None:
+            try:
+                response = ollama.chat(
+                    model=OLLAMA_MODEL,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    options={
+                        "temperature": 0.2,
+                        "repeat_penalty": 1.25,
+                        "num_ctx": 4096,
+                        "num_predict": 700,
+                    },
+                )
+                answer = response["message"]["content"].strip()
+            except Exception as error:
+                logger.exception("Ollama generation failed: %s", error)
+                return {"answer": FALLBACK_ANSWER, "sources": formatted_sources}
+        else:
             return {"answer": FALLBACK_ANSWER, "sources": formatted_sources}
 
         if FALLBACK_ANSWER.lower() in answer.lower() and len(answer) < len(FALLBACK_ANSWER) + 30:
