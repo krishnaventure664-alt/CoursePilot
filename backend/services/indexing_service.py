@@ -46,8 +46,9 @@ def index_video(video_id: str, course_id: int, video_title: str = ""):
         # keeping RTX 3050 and laptop CPU cool without loud continuous fan spin.
         time.sleep(0.015)
 
+    total_chunks = len(chunks)
+    del payloads, chunks, transcript_data
     return {
         "video_id": video_id,
-        "chunks_indexed": len(chunks),
-        "transcript": transcript_data,
+        "chunks_indexed": total_chunks,
     }

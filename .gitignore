@@ -19,6 +19,7 @@ backend/*.db*
 backend/*.zip
 backend/*.pdf
 downloads/
+backend/downloads/
 
 # Environment secrets (Never commit secrets to GitHub)
 .env
@@ -32,9 +33,28 @@ frontend/.next/
 frontend/out/
 frontend/build/
 
-# Scratch & temporary test scripts
+# Scratch, evaluation & temporary test scripts
 scratch/
+backend/test_*.py
+backend/*backup*.py
+backend/*_before_*.py
+backend/*.json
+backend/evaluation_*.py
+backend/run_evaluation.py
+backend/compare_*.py
+backend/prepare_*.py
+backend/real_course_evaluation.py
+backend/bge_m3_course_indexer.py
+backend/reindex_course.py
+backend/reset_database.py
+backend/retry_failed_videos.py
+backend/update_*.py
+backend/upgrade_*.py
+backend/services/video_ingestion_service.py
 *.log
+
+# Cloudflare & portable tools
+cloudflared.exe
 
 # OS generated files
 .DS_Store

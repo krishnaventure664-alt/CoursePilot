@@ -2,11 +2,17 @@
 import os
 import sys
 
+# Ensure backend root is always on sys.path regardless of execution directory
+backend_dir = os.path.dirname(os.path.abspath(__file__))
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
+
 # Thermal & CPU thread capping: prevents 100% CPU core saturation, fan runaway, and laptop overheating
 os.environ["OMP_NUM_THREADS"] = "4"
 os.environ["MKL_NUM_THREADS"] = "4"
 os.environ["RAYON_NUM_THREADS"] = "4"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 try:
     import torch
@@ -193,8 +199,17 @@ def list_courses(request: Request, user_id: str = Depends(get_current_user)):
 
 
 def index_playlist_in_background(course_id: int, items: list):
-    """Asynchronously indexes playlist videos with concurrent note generation and automatic VRAM memory release."""
+    """
+    High-throughput, low-load asynchronous indexing for 40+ hour playlists:
+    1. Sequentially chunks & embeds each video into BGE-M3 dense ChromaDB and sparse SQLite.
+    2. Immediately updates live progress per video so the frontend renders green checkmarks progressively.
+    3. Eagerly pre-generates study tools (Notes, Quiz, Flashcards) for Video 1 only, ensuring
+       instant 0ms readiness for the active lecture without bombarding the LLM or freezing the user's PC.
+    4. Automatically purges GPU VRAM and CPU garbage between videos with a 20ms thermal breather,
+       keeping computer fans silent and RAM usage minimal even across 50+ video playlists.
+    """
     import gc
+    import time
     try:
         import torch
         has_cuda = torch.cuda.is_available()
@@ -217,26 +232,24 @@ def index_playlist_in_background(course_id: int, items: list):
         if metadata and metadata.get("video_id")
     }
 
-    # Parallel worker pool for non-blocking Gemini note, quiz, and flashcard pre-generation
-    note_executor = ThreadPoolExecutor(max_workers=2)
-    note_futures = []
+    # Background executor for active lecture pre-generation (1 worker prevents API contention)
+    first_lecture_executor = ThreadPoolExecutor(max_workers=1)
+    first_lecture_started = False
 
-    def _safe_generate_study_tools(c_id: int, v_id: str, is_active_lecture: bool = False):
+    def _safe_pregenerate_active_lecture(c_id: int, v_id: str):
+        """Pre-generate Notes, Quiz, and Flashcards for the active lecture in background."""
         try:
             get_or_generate_notes(c_id, v_id)
         except Exception as note_err:
-            print(f"Background note generation error for {v_id}: {note_err}")
-        if is_active_lecture:
-            # Eagerly generate Quiz & Flashcards for the active/first lecture in the background
-            # so the user clicking Quiz or Flashcards sees them instantly in 0ms!
-            try:
-                get_or_generate_quiz(c_id, v_id)
-            except Exception as q_err:
-                print(f"Background quiz generation error for {v_id}: {q_err}")
-            try:
-                get_or_generate_flashcards(c_id, v_id)
-            except Exception as f_err:
-                print(f"Background flashcard generation error for {v_id}: {f_err}")
+            print(f"Background note generation for active lecture {v_id}: {note_err}")
+        try:
+            get_or_generate_quiz(c_id, v_id)
+        except Exception as q_err:
+            print(f"Background quiz generation for active lecture {v_id}: {q_err}")
+        try:
+            get_or_generate_flashcards(c_id, v_id)
+        except Exception as f_err:
+            print(f"Background flashcard generation for active lecture {v_id}: {f_err}")
 
     for position, item in enumerate(items, start=1):
         snippet = item["snippet"]
@@ -247,39 +260,36 @@ def index_playlist_in_background(course_id: int, items: list):
             completed += 1
             save_course_video(course_id, video_id, title, position, "completed")
             update_course_progress(course_id, completed, total, "indexing")
-            is_first = (position == 1 or completed == 1)
-            note_futures.append(note_executor.submit(_safe_generate_study_tools, course_id, video_id, is_first))
+            if not first_lecture_started and position == 1:
+                first_lecture_started = True
+                first_lecture_executor.submit(_safe_pregenerate_active_lecture, course_id, video_id)
             continue
 
         save_course_video(course_id, video_id, title, position, "processing")
         try:
             res = index_video(video_id=video_id, course_id=course_id, video_title=title)
-            video_status = "completed" if res["chunks_indexed"] > 0 else "failed"
+            video_status = "completed" if res.get("chunks_indexed", 0) > 0 else "failed"
         except Exception as e:
             video_status = "failed"
             print(f"Error indexing video {video_id}: {e}")
 
         if video_status == "completed":
             completed += 1
-            # Overlap study tools generation over the network while next video embeds on GPU
-            is_first = (position == 1 or completed == 1)
-            note_futures.append(note_executor.submit(_safe_generate_study_tools, course_id, video_id, is_first))
+            # Eagerly launch study tools pre-generation for the very first completed lecture
+            if not first_lecture_started:
+                first_lecture_started = True
+                first_lecture_executor.submit(_safe_pregenerate_active_lecture, course_id, video_id)
 
         save_course_video(course_id, video_id, title, position, video_status)
         update_course_progress(course_id, completed, total, "indexing")
 
-        # Free GPU tensor allocations between videos
+        # Thermal breather + immediate tensor garbage collection keeps CPU/GPU cool
         gc.collect()
         if has_cuda:
             torch.cuda.empty_cache()
+        time.sleep(0.02)
 
-    # Wait for all background notes to complete before finalizing
-    for future in note_futures:
-        try:
-            future.result(timeout=180)
-        except Exception as e:
-            print(f"Note future timeout/error: {e}")
-    note_executor.shutdown(wait=False)
+    first_lecture_executor.shutdown(wait=False)
 
     final_status = "completed" if completed > 0 else "failed"
     update_course_progress(course_id, completed, total, final_status)
@@ -675,3 +685,8 @@ def get_feedback_endpoint():
     """Returns recent user feedback records for review and interviewer metrics."""
     from services.course_db_service import get_all_feedback
     return {"feedback": get_all_feedback()}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)

@@ -20,11 +20,15 @@ def get_bge_m3_model():
                 logger.info("Importing FlagEmbedding and loading BGE-M3 model weights...")
                 from FlagEmbedding import BGEM3FlagModel
 
+                import torch
+                dev = "cuda:0" if torch.cuda.is_available() else "cpu"
+                fp16_flag = (dev != "cpu")
                 try:
-                    # Fast local path: bypass remote HuggingFace hub network checks
+                    # Fast local GPU path: bypass remote HuggingFace hub network checks
                     _model = BGEM3FlagModel(
                         MODEL_NAME,
-                        use_fp16=True,
+                        devices=dev,
+                        use_fp16=fp16_flag,
                         return_dense=True,
                         return_sparse=True,
                         return_colbert_vecs=False,
@@ -33,7 +37,8 @@ def get_bge_m3_model():
                 except Exception:
                     _model = BGEM3FlagModel(
                         MODEL_NAME,
-                        use_fp16=True,
+                        devices=dev,
+                        use_fp16=fp16_flag,
                         return_dense=True,
                         return_sparse=True,
                         return_colbert_vecs=False,

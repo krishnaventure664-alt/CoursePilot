@@ -282,64 +282,69 @@ def transcribe_audio_file_with_gemini(
         f"({total_duration:.1f}s / {total_duration/60:.1f} mins)..."
     )
 
-    all_segments = []
-    current_start = 0.0
-    slice_idx = 0
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     temp_dir = os.path.join(os.path.dirname(os.path.abspath(audio_path)), "temp_slices")
     os.makedirs(temp_dir, exist_ok=True)
 
+    # 1. Define all slice intervals
+    slice_tasks = []
+    current_start = 0.0
+    slice_idx = 0
     while current_start < total_duration:
         dur = min(slice_duration_seconds, total_duration - current_start)
         slice_idx += 1
         slice_file = os.path.join(temp_dir, f"slice_{slice_idx}_{int(current_start)}.mp3")
+        slice_tasks.append((slice_idx, current_start, dur, slice_file))
+        current_start += dur
 
-        logger.info(
-            f"Processing slice {slice_idx}: {current_start:.0f}s to {current_start+dur:.0f}s "
-            f"({dur/60:.1f} mins)..."
-        )
-
-        ok = compress_and_slice_audio(audio_path, current_start, dur, slice_file)
+    def _process_single_slice(task_tuple):
+        s_idx, s_start, s_dur, s_file = task_tuple
+        logger.info(f"Processing slice {s_idx}: {s_start:.0f}s to {s_start+s_dur:.0f}s ({s_dur/60:.1f} mins)...")
+        ok = compress_and_slice_audio(audio_path, s_start, s_dur, s_file)
         if not ok:
-            logger.error(f"Failed to create compressed slice {slice_idx}")
-            current_start += dur
-            continue
+            logger.error(f"Failed to create compressed slice {s_idx}")
+            return []
 
-        file_meta = upload_audio_to_gemini(slice_file, api_key)
+        file_meta = upload_audio_to_gemini(s_file, api_key)
         if not file_meta:
-            logger.error(f"Failed to upload slice {slice_idx} to Gemini File API")
-            if os.path.exists(slice_file):
+            logger.error(f"Failed to upload slice {s_idx} to Gemini File API")
+            if os.path.exists(s_file):
                 try:
-                    os.remove(slice_file)
+                    os.remove(s_file)
                 except OSError:
                     pass
-            current_start += dur
-            continue
+            return []
 
         file_uri = file_meta.get("uri")
         file_name = file_meta.get("name")
-
         try:
-            slice_segments = transcribe_audio_slice(
+            return transcribe_audio_slice(
                 file_uri,
                 api_key,
-                time_offset=current_start,
+                time_offset=s_start,
                 video_title=video_title,
             )
-            if slice_segments:
-                logger.info(f"Slice {slice_idx} transcribed: {len(slice_segments)} verbatim segments.")
-                all_segments.extend(slice_segments)
-            else:
-                logger.warning(f"Slice {slice_idx} produced no segments from Gemini.")
         finally:
-            # Always clean up Gemini cloud file and local temporary slice
             delete_gemini_file(file_name, api_key)
-            if os.path.exists(slice_file):
+            if os.path.exists(s_file):
                 try:
-                    os.remove(slice_file)
+                    os.remove(s_file)
                 except OSError:
                     pass
 
-        current_start += dur
+    # 2. Transcribe slices concurrently (3 parallel workers for low-latency with 0% CPU load)
+    all_segments = []
+    max_workers = min(3, len(slice_tasks)) if slice_tasks else 1
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_process_single_slice, task): task for task in slice_tasks}
+        for future in as_completed(futures):
+            try:
+                segs = future.result()
+                if segs:
+                    all_segments.extend(segs)
+            except Exception as slice_err:
+                logger.warning(f"Slice transcription exception: {slice_err}")
 
     # Clean up temp folder if empty
     try:

@@ -48,10 +48,10 @@ logger = logging.getLogger(__name__)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
 GEMINI_MODELS = [
-    "gemini-2.5-flash",
-    "gemini-3-flash-preview",
     "gemini-flash-lite-latest",
     "gemini-3.1-flash-lite-preview",
+    "gemini-2.5-flash",
+    "gemini-3-flash-preview",
 ]
 
 # Persistent session with connection pooling for low-latency concurrent API calls
@@ -98,7 +98,7 @@ def is_note_truncated(text: str | None, transcript_len: int = 0) -> bool:
 
     """Detects if a note was cut off in the middle, incomplete, or ends abruptly."""
 
-    if not text or len(text.strip()) < 500:
+    if not text or len(text.strip()) < 150:
 
         return True
 
@@ -170,18 +170,16 @@ def _call_gemini(prompt: str, system_instruction: str = "", max_output_tokens: i
 
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
 
+        gen_config = {
+            "temperature": 0.2,
+            "maxOutputTokens": max_output_tokens,
+        }
+        if "2.5" in model_name or "3" in model_name:
+            gen_config["thinkingConfig"] = {"thinkingBudget": 0}
+
         payload = {
-
             "contents": [{"parts": [{"text": prompt}]}],
-
-            "generationConfig": {
-
-                "temperature": 0.2,
-
-                "maxOutputTokens": max_output_tokens,
-
-            }
-
+            "generationConfig": gen_config,
         }
 
         if system_instruction:
@@ -191,8 +189,13 @@ def _call_gemini(prompt: str, system_instruction: str = "", max_output_tokens: i
         for attempt in range(2):
 
             try:
-
                 res = http_session.post(url, json=payload, timeout=30)
+                if res.status_code == 400 and "thinkingConfig" in gen_config:
+                    payload["generationConfig"] = {
+                        "temperature": 0.2,
+                        "maxOutputTokens": max_output_tokens,
+                    }
+                    res = http_session.post(url, json=payload, timeout=30)
 
                 if res.status_code == 200:
 
@@ -411,35 +414,46 @@ def contains_devanagari(text: str) -> bool:
 
 
 def _clean_json_response(raw_text: str) -> str:
-
-    """Robustly extract and strip JSON payload, handling markdown codeblocks or raw JSON."""
-
+    """Robustly extract and strip JSON payload, handling markdown codeblocks, raw JSON, text wrappers, and trailing commas."""
+    if not raw_text:
+        return "[]"
     match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw_text)
+    candidate = match.group(1).strip() if match else raw_text.strip()
+    if candidate.startswith("```"):
+        candidate = candidate.lstrip("`").strip()
+        if candidate.lower().startswith("json"):
+            candidate = candidate[4:].strip()
+    # Locate the outermost [ ... ] array if extra conversational wrapper exists
+    if not candidate.startswith("[") and "[" in candidate:
+        start_idx = candidate.find("[")
+        end_idx = candidate.rfind("]")
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            candidate = candidate[start_idx : end_idx + 1]
+    # Remove illegal trailing commas before closing brackets or braces
+    candidate = re.sub(r',\s*([\]}])', r'\1', candidate)
+    return candidate
 
-    if match:
 
-        return match.group(1).strip()
-
-    text = raw_text.strip()
-
-    if text.startswith("```"):
-
-        parts = text.split("```")
-
-        if len(parts) >= 2:
-
-            inner = parts[1]
-
-            if inner.startswith("json"):
-
-                inner = inner[4:]
-
-            return inner.strip()
-
-    return text
-
-_notes_in_flight: dict[tuple[int, str], threading.Event] = {}
-_notes_in_flight_lock = threading.Lock()
+def _get_lecture_whole_transcript(chunks: list[tuple[float, float, str]], max_chars: int = 300000) -> str:
+    """Formats all lecture chunks chronologically from start to end with [MM:SS - MM:SS] timestamp labels."""
+    if not chunks:
+        return ""
+    total_dur = chunks[-1][1] - chunks[0][0] if chunks else 0.0
+    lines = []
+    total_len = 0
+    for s, e, text in chunks:
+        if total_dur >= 3600.0:
+            s_label = f"{int(s) // 3600:02d}:{(int(s) % 3600) // 60:02d}:{int(s) % 60:02d}"
+            e_label = f"{int(e) // 3600:02d}:{(int(e) % 3600) // 60:02d}:{int(e) % 60:02d}"
+        else:
+            s_label = f"{int(s) // 60:02d}:{int(s) % 60:02d}"
+            e_label = f"{int(e) // 60:02d}:{int(e) % 60:02d}"
+        line = f"[{s_label} - {e_label}] {text.strip()}"
+        lines.append(line)
+        total_len += len(line)
+        if total_len >= max_chars:
+            break
+    return "\n\n".join(lines)
 
 
 def get_or_generate_notes(course_id: int, video_id: str, force_refresh: bool = False) -> dict:
@@ -548,6 +562,40 @@ def _get_study_tool_grounding_context(course_id: int, video_id: str | None = Non
     return "\n\n".join(sampled)[:max_chars]
 
 
+def _get_all_existing_quiz_questions(course_id: int, video_id: str | None) -> list[str]:
+    """Retrieves all question prompts already generated in previous sets for this video to prevent any duplicate questions."""
+    from services.course_db_service import get_cached_quiz, get_quiz_set_indices
+    indices = get_quiz_set_indices(course_id, video_id)
+    questions = []
+    for idx in indices:
+        cached = get_cached_quiz(course_id, video_id, set_index=idx)
+        if cached:
+            try:
+                data = json.loads(cached["quiz_data"])
+                if isinstance(data, list):
+                    for q in data:
+                        q_text = q.get("question", "").strip()
+                        if q_text:
+                            questions.append(q_text)
+            except Exception:
+                pass
+    return questions
+
+
+def _get_all_existing_flashcard_fronts(course_id: int, video_id: str | None) -> list[str]:
+    """Retrieves all flashcard front prompts already generated in previous sets for this video to prevent duplicate cards."""
+    from services.course_db_service import get_flashcards, get_flashcard_set_indices
+    indices = get_flashcard_set_indices(course_id, video_id)
+    fronts = []
+    for idx in indices:
+        cards = get_flashcards(course_id, video_id, set_index=idx)
+        for c in cards:
+            f_text = c.get("front", "").strip()
+            if f_text:
+                fronts.append(f_text)
+    return fronts
+
+
 _quiz_in_flight: dict[tuple[int, str | None, int], threading.Event] = {}
 _quiz_in_flight_lock = threading.Lock()
 
@@ -558,74 +606,49 @@ def get_or_generate_quiz(
     requested_set: int | None = None,
 ) -> dict:
     """
-    Returns or generates progressive interactive MCQs for the lecture.
-    If force_refresh is True, advances to the next chronological set.
-    When all sets covering the lecture are complete, it loops back to Set 1 and flags all_covered=True.
+    Returns existing cached MCQs or generates a new non-repeating set of questions covering remaining important concepts.
+    Sets are content-driven: as many sets as needed to cover the lecture from start to end without duplicate questions.
+    Once generated and saved in SQLite, it is NEVER re-generated.
     """
-    # Fast path: instant return from SQLite cache without loading all chunks
-    if not force_refresh:
-        cached = get_cached_quiz(course_id, video_id, set_index=requested_set if requested_set is not None else None)
-        if cached and not contains_devanagari(cached.get("quiz_data", "")):
-            try:
-                quiz_data = json.loads(cached["quiz_data"])
-                cur_set = cached.get("set_index", 0)
-                return {
-                    "quiz": quiz_data,
-                    "set_index": cur_set + 1,
-                    "total_sets": max(2, cur_set + 1),
-                    "all_covered": False,
-                    "message": "",
-                }
-            except Exception:
-                pass
+    from services.course_db_service import get_quiz_set_indices
+    existing_sets = get_quiz_set_indices(course_id, video_id)
 
-    chunks = _get_lecture_chunks(course_id, video_id)
-    if not chunks:
-        return {"quiz": [], "set_index": 1, "total_sets": 1, "all_covered": False, "message": "No lecture content found."}
-
-    total_dur = chunks[-1][1] - chunks[0][0] if chunks else 0.0
-    if total_dur <= 1200.0:
-        total_sets = 2
-    elif total_dur <= 3600.0:
-        total_sets = 3
-    elif total_dur <= 7200.0:
-        total_sets = 4
-    else:
-        total_sets = max(4, min(12, int(total_dur / 3600)))
-
-    all_covered = False
-    message = ""
+    # Determine which set index (0-based) to target
     if requested_set is not None:
-        target_set = requested_set % total_sets
-        all_covered = (requested_set >= total_sets)
+        target_set = max(0, requested_set - 1 if requested_set >= 1 else requested_set)
     elif force_refresh:
-        latest = get_cached_quiz(course_id, video_id)
-        last_set = latest.get("set_index", 0) if latest else 0
-        next_set = last_set + 1
-        if next_set >= total_sets:
-            target_set = 0
-            all_covered = True
-            message = "🎉 You have covered all questions & concepts from this lecture! Starting revision from Set 1."
-        else:
-            target_set = next_set
+        target_set = (max(existing_sets) + 1) if existing_sets else 0
     else:
-        latest = get_cached_quiz(course_id, video_id)
-        target_set = latest.get("set_index", 0) if latest else 0
+        target_set = 0
 
+    # CRITICAL: Always check SQLite first. Once generated, NEVER regenerate!
     cached = get_cached_quiz(course_id, video_id, set_index=target_set)
-    if cached and (not force_refresh or all_covered or requested_set is not None):
-        if not contains_devanagari(cached.get("quiz_data", "")):
-            try:
-                quiz_data = json.loads(cached["quiz_data"])
+    if cached and not contains_devanagari(cached.get("quiz_data", "")):
+        try:
+            quiz_data = json.loads(cached["quiz_data"])
+            if isinstance(quiz_data, list) and len(quiz_data) > 0:
+                available_sets = sorted(list(set(existing_sets + [target_set])))
                 return {
                     "quiz": quiz_data,
                     "set_index": target_set + 1,
-                    "total_sets": total_sets,
-                    "all_covered": all_covered,
-                    "message": message,
+                    "total_sets": max(len(available_sets), target_set + 1),
+                    "available_sets": [s + 1 for s in available_sets],
+                    "all_covered": False,
+                    "message": "",
                 }
-            except Exception:
-                pass
+        except Exception:
+            pass
+
+    chunks = _get_lecture_chunks(course_id, video_id)
+    if not chunks:
+        return {
+            "quiz": [],
+            "set_index": target_set + 1,
+            "total_sets": 1,
+            "available_sets": [1],
+            "all_covered": False,
+            "message": "No lecture content found.",
+        }
 
     # Thread-safe in-flight coordination to eliminate duplicate concurrent Gemini calls
     event = None
@@ -639,74 +662,110 @@ def get_or_generate_quiz(
             is_leader = True
 
     if not is_leader and event is not None:
-        event.wait(timeout=35.0)
+        event.wait(timeout=45.0)
         cached = get_cached_quiz(course_id, video_id, set_index=target_set)
         if cached and not contains_devanagari(cached.get("quiz_data", "")):
             try:
                 quiz_data = json.loads(cached["quiz_data"])
+                available_sets = sorted(list(set(get_quiz_set_indices(course_id, video_id) + [target_set])))
                 return {
                     "quiz": quiz_data,
                     "set_index": target_set + 1,
-                    "total_sets": total_sets,
-                    "all_covered": all_covered,
-                    "message": message,
+                    "total_sets": max(len(available_sets), target_set + 1),
+                    "available_sets": [s + 1 for s in available_sets],
+                    "all_covered": False,
+                    "message": "",
                 }
             except Exception:
                 pass
 
     try:
-        s_start = target_set * (total_dur / total_sets)
-        s_end = (target_set + 1) * (total_dur / total_sets)
-        s_chunks = [c for c in chunks if c[1] >= s_start and c[0] <= s_end]
-        if not s_chunks:
-            s_chunks = chunks
+        # Full transcript from 00:00 to the very last second
+        context = _get_lecture_whole_transcript(chunks)
+        total_dur = chunks[-1][1] - chunks[0][0] if chunks else 0.0
+        dur_min = f"{total_dur / 60:.1f} minutes"
 
-        if total_dur >= 3600.0:
-            s_label = f"{int(s_start) // 3600:02d}:{(int(s_start) % 3600) // 60:02d}:{int(s_start) % 60:02d}"
-            e_label = f"{int(s_end) // 3600:02d}:{(int(s_end) % 3600) // 60:02d}:{int(s_end) % 60:02d}"
-        else:
-            s_label = f"{int(s_start) // 60:02d}:{int(s_start) % 60:02d}"
-            e_label = f"{int(s_end) // 60:02d}:{int(s_end) % 60:02d}"
+        set_num = target_set + 1
+        previous_questions = _get_all_existing_quiz_questions(course_id, video_id)
+        dup_prevention = ""
+        if previous_questions:
+            preview = "\n- ".join(previous_questions[:60])
+            dup_prevention = f"""
 
-        context = "\n\n".join(c[2] for c in s_chunks)[:30000]
+PREVIOUSLY GENERATED QUESTIONS IN EARLIER SETS (DO NOT REPEAT ANY OF THESE):
+- {preview}
 
-        system_prompt = (
-            f"You are an expert academic examiner creating high-quality, interactive multiple choice questions (MCQs) "
-            f"based EXCLUSIVELY on the provided lecture section ({s_label} to {e_label}).\n\n"
-            "ABSOLUTE ZERO-OUTSIDE-KNOWLEDGE RULES:\n"
-            "1. STRICT FACTUAL GROUNDING: Every question, answer option, and explanation MUST be derived ONLY from what "
-            "the instructor explicitly explained, demonstrated, solved, or taught in this section.\n"
-            "2. ZERO OUTSIDE ADDITIONS: Do NOT introduce external textbook questions, facts, or proofs.\n"
-            "3. EXPLANATION GROUNDING: In the 'explanation' field, cite the instructor's reasoning from the lecture.\n"
-            "4. MANDATORY ENGLISH LANGUAGE: All questions, answer options, and explanations MUST be written 100% in clear, fluent English. Even if the lecture is spoken in Hindi, Hinglish, or another regional language, translate and phrase all concepts, questions, choices, and explanations strictly in standard English. NEVER use Hindi or Devanagari script.\n"
-            "5. NO LATEX: Use clean Unicode.\n\n"
-            "Return ONLY a valid JSON array of 5 objects with exact fields:\n"
-            "- 'id': (integer 1-5)\n"
-            "- 'question': (string)\n"
-            "- 'options': (array of 4 distinct choices)\n"
-            "- 'correct_index': (integer 0-3)\n"
-            "- 'explanation': (string)"
-        )
+CRITICAL NON-DUPLICATION & COMPLETION RULES:
+1. STRICT NON-DUPLICATION: Do NOT repeat, rephrase, or duplicate any of the questions listed above.
+2. REMAINING CONCEPTS ONLY: Formulate questions ONLY for remaining important concepts, formulas, algorithms, derivations, mechanisms, or exam tips taught by the instructor across the lecture that have NOT yet been tested.
+3. ALL CONCEPTS COVERED SIGNAL: If ALL important concepts taught by the instructor across the whole lecture have already been thoroughly covered by the previous sets, and no more genuine, grounded, non-duplicate questions can be created from the transcript, return ONLY an empty JSON array: []"""
 
-        user_prompt = f"LECTURE SECTION ({s_label} to {e_label}):\n{context}\n\nGenerate 5 strictly grounded MCQs in JSON format:"
+        system_prompt = f"""You are an expert academic examiner creating high-quality, comprehensive multiple choice questions (MCQs) for Set {set_num}.
+The questions MUST be generated from the ENTIRE lecture ({dur_min}) from start (00:00) to the very end.
 
-        raw_text = _call_gemini(user_prompt, system_instruction=system_prompt, max_output_tokens=2048)
+ABSOLUTE ZERO-OUTSIDE-KNOWLEDGE RULES:
+1. FULL START-TO-END COVERAGE: Questions MUST span across the entire video from the very beginning (00:00) through all middle concepts to the final seconds. Distribute questions evenly across the whole timeline.
+2. NO ARBITRARY QUESTION RESTRICTION: Extract all important remaining concepts taught in this lecture and formulate high-yield MCQs covering them without skipping important content.
+3. STRICT FACTUAL GROUNDING: Every question, answer option, and explanation MUST be derived ONLY from what the instructor explicitly explained or demonstrated in this lecture. Zero outside textbook additions or external trivia.
+4. GROUNDED EXPLANATIONS WITH TIMESTAMPS: In the 'explanation' field, cite the instructor's reasoning and include the approximate timestamp range from the transcript (e.g. 'Explained around 14:20 - 16:00 that...').
+5. MANDATORY ENGLISH LANGUAGE: All questions, answer options, and explanations MUST be written 100% in clear, fluent English. Even if the lecture was spoken in Hindi, Hinglish, or another regional language, translate and express everything strictly in standard English. NEVER use Hindi or Devanagari script.
+6. NO RAW LATEX: Use clean Unicode symbols (e.g., →, ↑, ↓, ², ±, α, β, θ).{dup_prevention}
+
+Return ONLY a valid JSON array of objects with exact fields:
+- 'id': (integer starting at 1)
+- 'question': (string)
+- 'options': (array of 4 distinct choices)
+- 'correct_index': (integer 0-3)
+- 'explanation': (string)"""
+
+        user_prompt = f"""COMPLETE LECTURE TRANSCRIPT (00:00 to end, {dur_min}):
+
+{context}
+
+Generate comprehensive Set {set_num} MCQs covering remaining important concepts from start to end in JSON format (or [] if all concepts are already covered):"""
+
+        raw_text = _call_gemini(user_prompt, system_instruction=system_prompt, max_output_tokens=8192)
         if raw_text:
             try:
                 clean_json = _clean_json_response(raw_text)
                 quiz_data = json.loads(clean_json)
-                save_quiz(course_id, video_id, clean_json, set_index=target_set)
-                return {
-                    "quiz": quiz_data,
-                    "set_index": target_set + 1,
-                    "total_sets": total_sets,
-                    "all_covered": all_covered,
-                    "message": message,
-                }
+
+                # Check if all concepts are already covered (empty array or no new questions)
+                if isinstance(quiz_data, list) and len(quiz_data) == 0:
+                    latest_set_idx = max(existing_sets) if existing_sets else 0
+                    cached_latest = get_cached_quiz(course_id, video_id, set_index=latest_set_idx)
+                    active_quiz = json.loads(cached_latest["quiz_data"]) if cached_latest else []
+                    return {
+                        "quiz": active_quiz,
+                        "set_index": latest_set_idx + 1,
+                        "total_sets": len(existing_sets),
+                        "available_sets": [s + 1 for s in existing_sets],
+                        "all_covered": True,
+                        "message": f"🎉 All important concepts from this lecture are completely covered across {len(existing_sets)} sets.",
+                    }
+
+                if isinstance(quiz_data, list) and len(quiz_data) > 0:
+                    save_quiz(course_id, video_id, clean_json, set_index=target_set)
+                    updated_sets = sorted(list(set(get_quiz_set_indices(course_id, video_id) + [target_set])))
+                    return {
+                        "quiz": quiz_data,
+                        "set_index": target_set + 1,
+                        "total_sets": len(updated_sets),
+                        "available_sets": [s + 1 for s in updated_sets],
+                        "all_covered": False,
+                        "message": f"Set {set_num} generated covering remaining concepts ({len(quiz_data)} questions).",
+                    }
             except Exception as e:
                 logger.error("Failed to parse quiz JSON: %s", e)
 
-        return {"quiz": [], "set_index": target_set + 1, "total_sets": total_sets, "all_covered": all_covered, "message": message}
+        return {
+            "quiz": [],
+            "set_index": target_set + 1,
+            "total_sets": max(1, len(existing_sets)),
+            "available_sets": [s + 1 for s in (existing_sets or [0])],
+            "all_covered": False,
+            "message": "Failed to generate quiz questions. Please try again.",
+        }
     finally:
         if is_leader and event is not None:
             with _quiz_in_flight_lock:
@@ -724,68 +783,44 @@ def get_or_generate_flashcards(
     requested_set: int | None = None,
 ) -> dict:
     """
-    Returns or generates progressive spaced-repetition flashcards for the lecture.
-    If force_refresh is True, advances to the next chronological set.
-    When all sets covering the lecture are complete, it loops back to Set 1 and flags all_covered=True.
+    Returns existing cached flashcards or generates a new non-repeating set covering remaining important concepts.
+    Sets are content-driven: as many sets as needed to cover the lecture from start to end without duplicate cards.
+    Once generated and saved in SQLite, it is NEVER re-generated.
     """
-    # Fast path: instant return from SQLite cache without loading all chunks
-    if not force_refresh:
-        existing_set = get_flashcards(course_id, video_id, set_index=requested_set if requested_set is not None else None)
-        if existing_set and not any(contains_devanagari(c.get("front", "") + c.get("back", "") + c.get("category", "")) for c in existing_set):
-            cur_set = existing_set[0].get("set_index", 0) if existing_set else 0
-            return {
-                "flashcards": existing_set,
-                "set_index": cur_set + 1,
-                "total_sets": max(2, cur_set + 1),
-                "all_covered": False,
-                "message": "",
-            }
+    from services.course_db_service import get_flashcard_set_indices
+    existing_sets = get_flashcard_set_indices(course_id, video_id)
+
+    # Determine which set index (0-based) to target
+    if requested_set is not None:
+        target_set = max(0, requested_set - 1 if requested_set >= 1 else requested_set)
+    elif force_refresh:
+        target_set = (max(existing_sets) + 1) if existing_sets else 0
+    else:
+        target_set = 0
+
+    # CRITICAL: Always check SQLite first. Once generated, NEVER regenerate!
+    existing_cards = get_flashcards(course_id, video_id, set_index=target_set)
+    if existing_cards and not any(contains_devanagari(c.get("front", "") + c.get("back", "") + c.get("category", "")) for c in existing_cards):
+        available_sets = sorted(list(set(existing_sets + [target_set])))
+        return {
+            "flashcards": existing_cards,
+            "set_index": target_set + 1,
+            "total_sets": max(len(available_sets), target_set + 1),
+            "available_sets": [s + 1 for s in available_sets],
+            "all_covered": False,
+            "message": "",
+        }
 
     chunks = _get_lecture_chunks(course_id, video_id)
     if not chunks:
-        return {"flashcards": [], "set_index": 1, "total_sets": 1, "all_covered": False, "message": "No lecture content found."}
-
-    total_dur = chunks[-1][1] - chunks[0][0] if chunks else 0.0
-    if total_dur <= 1200.0:
-        total_sets = 2
-    elif total_dur <= 3600.0:
-        total_sets = 3
-    elif total_dur <= 7200.0:
-        total_sets = 4
-    else:
-        total_sets = max(4, min(12, int(total_dur / 3600)))
-
-    all_covered = False
-    message = ""
-    if requested_set is not None:
-        target_set = requested_set % total_sets
-        all_covered = (requested_set >= total_sets)
-    elif force_refresh:
-        existing_all = get_flashcards(course_id, video_id)
-        last_set = max((c.get("set_index", 0) for c in existing_all), default=0)
-        next_set = last_set + 1
-        if next_set >= total_sets:
-            target_set = 0
-            all_covered = True
-            message = "🎉 You have reviewed all key concepts from this lecture! Starting revision loop from Set 1."
-        else:
-            target_set = next_set
-    else:
-        existing_all = get_flashcards(course_id, video_id)
-        target_set = max((c.get("set_index", 0) for c in existing_all), default=0)
-
-    existing_set = get_flashcards(course_id, video_id, set_index=target_set)
-    if existing_set and (not force_refresh or all_covered or requested_set is not None):
-        if not any(contains_devanagari(c.get("front", "") + c.get("back", "") + c.get("category", "")) for c in existing_set):
-            return {
-                "flashcards": existing_set,
-                "set_index": target_set + 1,
-                "total_sets": total_sets,
-                "all_covered": all_covered,
-                "message": message,
-            }
-        else:
-            clear_flashcards(course_id, video_id, set_index=target_set)
+        return {
+            "flashcards": [],
+            "set_index": target_set + 1,
+            "total_sets": 1,
+            "available_sets": [1],
+            "all_covered": False,
+            "message": "No lecture content found.",
+        }
 
     # Thread-safe in-flight coordination to eliminate duplicate concurrent Gemini calls
     event = None
@@ -799,73 +834,102 @@ def get_or_generate_flashcards(
             is_leader = True
 
     if not is_leader and event is not None:
-        event.wait(timeout=35.0)
-        existing_set = get_flashcards(course_id, video_id, set_index=target_set)
-        if existing_set and not any(contains_devanagari(c.get("front", "") + c.get("back", "") + c.get("category", "")) for c in existing_set):
+        event.wait(timeout=45.0)
+        existing_cards = get_flashcards(course_id, video_id, set_index=target_set)
+        if existing_cards and not any(contains_devanagari(c.get("front", "") + c.get("back", "") + c.get("category", "")) for c in existing_cards):
+            available_sets = sorted(list(set(get_flashcard_set_indices(course_id, video_id) + [target_set])))
             return {
-                "flashcards": existing_set,
+                "flashcards": existing_cards,
                 "set_index": target_set + 1,
-                "total_sets": total_sets,
-                "all_covered": all_covered,
-                "message": message,
+                "total_sets": max(len(available_sets), target_set + 1),
+                "available_sets": [s + 1 for s in available_sets],
+                "all_covered": False,
+                "message": "",
             }
 
     try:
-        s_start = target_set * (total_dur / total_sets)
-        s_end = (target_set + 1) * (total_dur / total_sets)
-        s_chunks = [c for c in chunks if c[1] >= s_start and c[0] <= s_end]
-        if not s_chunks:
-            s_chunks = chunks
+        # Full transcript from 00:00 to the very last second
+        context = _get_lecture_whole_transcript(chunks)
+        total_dur = chunks[-1][1] - chunks[0][0] if chunks else 0.0
+        dur_min = f"{total_dur / 60:.1f} minutes"
 
-        if total_dur >= 3600.0:
-            s_label = f"{int(s_start) // 3600:02d}:{(int(s_start) % 3600) // 60:02d}:{int(s_start) % 60:02d}"
-            e_label = f"{int(s_end) // 3600:02d}:{(int(s_end) % 3600) // 60:02d}:{int(s_end) % 60:02d}"
-        else:
-            s_label = f"{int(s_start) // 60:02d}:{int(s_start) % 60:02d}"
-            e_label = f"{int(s_end) // 60:02d}:{int(s_end) % 60:02d}"
+        set_num = target_set + 1
+        previous_fronts = _get_all_existing_flashcard_fronts(course_id, video_id)
+        dup_prevention = ""
+        if previous_fronts:
+            preview = "\n- ".join(previous_fronts[:60])
+            dup_prevention = f"""
 
-        context = "\n\n".join(c[2] for c in s_chunks)[:30000]
+PREVIOUSLY GENERATED FLASHCARDS IN EARLIER SETS (DO NOT REPEAT ANY OF THESE):
+- {preview}
 
-        system_prompt = (
-            f"You are an expert tutor creating study flashcards for spaced repetition based EXCLUSIVELY on the provided lecture section ({s_label} to {e_label}).\n\n"
-            "ABSOLUTE ZERO-OUTSIDE-KNOWLEDGE RULES:\n"
-            "1. STRICT FACTUAL GROUNDING: Every card MUST be based ONLY on what the instructor explained or demonstrated in this section.\n"
-            "2. ZERO OUTSIDE ADDITIONS: Do NOT pull trivia or facts from external sources.\n"
-            "3. ACCURATE CATEGORIES: Categorize each card according to subject matter (e.g. 'Definition', 'Core Concept', 'Formula & Derivation', 'Instructor Tip').\n"
-            "4. MANDATORY ENGLISH LANGUAGE: All flashcards (front, back, and category) MUST be written 100% in clear, fluent English. Even if the lecture is spoken in Hindi, Hinglish, or another regional language, translate and express all terms, concepts, questions, and explanations strictly in standard English. NEVER use Hindi or Devanagari script.\n"
-            "5. NO LATEX: Use clean Unicode.\n\n"
-            "Return ONLY a valid JSON array of 6 to 8 objects with exact fields:\n"
-            "- 'front': (string, clear question or term)\n"
-            "- 'back': (string, accurate concise answer)\n"
-            "- 'category': (string, subject category)"
-        )
+CRITICAL NON-DUPLICATION & COMPLETION RULES:
+1. STRICT NON-DUPLICATION: Do NOT repeat, rephrase, or duplicate any of the flashcard concepts or questions listed above.
+2. REMAINING CONCEPTS ONLY: Formulate cards ONLY for remaining important definitions, mechanisms, algorithm steps, formulas, trade-offs, and instructor tips taught across the lecture that have NOT yet been covered.
+3. ALL CONCEPTS COVERED SIGNAL: If ALL important concepts taught by the instructor across the whole lecture have already been thoroughly covered by the previous sets, and no more genuine, grounded, non-duplicate flashcards can be created from the transcript, return ONLY an empty JSON array: []"""
 
-        user_prompt = f"LECTURE SECTION ({s_label} to {e_label}):\n{context}\n\nGenerate 6 to 8 strictly grounded flashcards in JSON format:"
+        system_prompt = f"""You are an expert academic tutor creating study flashcards for spaced repetition for Set {set_num}.
+The flashcards MUST be generated from the ENTIRE lecture ({dur_min}) from start (00:00) to the very end.
 
-        raw_text = _call_gemini(user_prompt, system_instruction=system_prompt, max_output_tokens=2048)
+ABSOLUTE ZERO-OUTSIDE-KNOWLEDGE RULES:
+1. FULL START-TO-END COVERAGE: Flashcards MUST cover the ENTIRE lecture from the very beginning (00:00) through all middle concepts to the very end. Distribute cards across the full video timeline.
+2. NO ARBITRARY CARD RESTRICTION: Identify all remaining important concepts, terms, formulas, mechanisms, rules, and instructor emphasis. Generate comprehensive flashcards covering all of them without skipping important content.
+3. STRICT FACTUAL GROUNDING: Every card MUST be based ONLY on what the instructor explained or demonstrated in this lecture. Zero external trivia.
+4. ACCURATE CATEGORIES: Categorize each card according to subject matter (e.g. 'Definition', 'Core Concept', 'Formula & Derivation', 'Algorithm / Mechanism', 'Comparison', 'Instructor Tip').
+5. MANDATORY ENGLISH LANGUAGE: All flashcards (front, back, and category) MUST be written 100% in clear, fluent English. Even if the lecture was spoken in Hindi, Hinglish, or another regional language, translate and express everything strictly in standard English. NEVER use Hindi or Devanagari script.
+6. NO RAW LATEX: Use clean Unicode symbols (e.g., →, ↑, ↓, ², ±, α, β, θ).{dup_prevention}
+
+Return ONLY a valid JSON array of objects with exact fields:
+- 'front': (string, clear question, prompt, or term to test recall)
+- 'back': (string, accurate concise answer grounded in the lecture)
+- 'category': (string, subject category)"""
+
+        user_prompt = f"""COMPLETE LECTURE TRANSCRIPT (00:00 to end, {dur_min}):
+
+{context}
+
+Generate comprehensive Set {set_num} flashcards covering remaining important concepts from start to end in JSON format (or [] if all concepts are already covered):"""
+
+        raw_text = _call_gemini(user_prompt, system_instruction=system_prompt, max_output_tokens=8192)
         if raw_text:
             try:
                 clean_json = _clean_json_response(raw_text)
                 cards = json.loads(clean_json)
-                if force_refresh:
-                    clear_flashcards(course_id, video_id, set_index=target_set)
-                save_flashcards(course_id, video_id, cards, set_index=target_set)
-                return {
-                    "flashcards": get_flashcards(course_id, video_id, set_index=target_set),
-                    "set_index": target_set + 1,
-                    "total_sets": total_sets,
-                    "all_covered": all_covered,
-                    "message": message,
-                }
+
+                # Check if all concepts are already covered (empty array or no new cards)
+                if isinstance(cards, list) and len(cards) == 0:
+                    latest_set_idx = max(existing_sets) if existing_sets else 0
+                    active_cards = get_flashcards(course_id, video_id, set_index=latest_set_idx)
+                    return {
+                        "flashcards": active_cards,
+                        "set_index": latest_set_idx + 1,
+                        "total_sets": len(existing_sets),
+                        "available_sets": [s + 1 for s in existing_sets],
+                        "all_covered": True,
+                        "message": f"🎉 All important concepts from this lecture are completely covered across {len(existing_sets)} sets.",
+                    }
+
+                if isinstance(cards, list) and len(cards) > 0:
+                    save_flashcards(course_id, video_id, cards, set_index=target_set)
+                    updated_sets = sorted(list(set(get_flashcard_set_indices(course_id, video_id) + [target_set])))
+                    return {
+                        "flashcards": get_flashcards(course_id, video_id, set_index=target_set),
+                        "set_index": target_set + 1,
+                        "total_sets": len(updated_sets),
+                        "available_sets": [s + 1 for s in updated_sets],
+                        "all_covered": False,
+                        "message": f"Set {set_num} generated covering remaining concepts ({len(cards)} flashcards).",
+                    }
             except Exception as e:
                 logger.error("Failed to parse flashcard JSON: %s", e)
 
         return {
-            "flashcards": existing_set if existing_set else [],
+            "flashcards": existing_cards if existing_cards else [],
             "set_index": target_set + 1,
-            "total_sets": total_sets,
-            "all_covered": all_covered,
-            "message": message,
+            "total_sets": max(1, len(existing_sets)),
+            "available_sets": [s + 1 for s in (existing_sets or [0])],
+            "all_covered": False,
+            "message": "Failed to generate flashcards. Please try again.",
         }
     finally:
         if is_leader and event is not None:
@@ -886,7 +950,9 @@ def _generate_sectional_quick_notes(chunks: list[tuple[float, float, str]], vide
     for start, end, chunk_text in chunks:
         if (end - section_start) > section_duration and current_section:
             sections.append(current_section)
-            current_section = [(start, end, chunk_text)]
+            # Include boundary overlap chunk for seamless continuity
+            overlap = [current_section[-1]] if current_section else []
+            current_section = overlap + [(start, end, chunk_text)]
             section_start = start
         else:
             current_section.append((start, end, chunk_text))
@@ -895,10 +961,14 @@ def _generate_sectional_quick_notes(chunks: list[tuple[float, float, str]], vide
 
     total_secs = len(sections)
     system_prompt = (
-        "You are an expert tutor creating concise, high-yield Quick Revision Notes based EXCLUSIVELY on the transcript.\n"
-        "ZERO OUTSIDE KNOWLEDGE. Strictly grounded in what was spoken by the instructor.\n"
-        "NO LATEX. Use clean Unicode symbols.\n"
-        "Generate 6 to 10 punchy, high-yield bullet points capturing EVERY key concept, formula, scheme year, and question/MCQ answer taught in this section."
+        "You are CoursePilot, an expert university teaching assistant creating concise, structured, high-yield Quick Revision Notes based EXCLUSIVELY on the provided lecture transcript.\n\n"
+        "ABSOLUTE ZERO-OUTSIDE-KNOWLEDGE RULES:\n"
+        "1. STRICT FACTUAL GROUNDING: Base every note, bullet point, theorem, and explanation ONLY on what was actually spoken, taught, or demonstrated by the instructor in this lecture section. Never invent outside facts.\n"
+        "2. ZERO OUTSIDE ADDITIONS: Do NOT introduce external textbook concepts, proofs, history, or algorithms that the instructor did not teach.\n"
+        "3. COMPLETE CHRONOLOGICAL COVERAGE: Cover this section from start to end without skipping any taught concept, formula, scheme year, or question.\n"
+        "4. HIGH-YIELD & STRUCTURED: Write in punchy bullet points with bold key terms, exam takeaways, and concise explanations.\n"
+        "5. NO LATEX: Do NOT use LaTeX math syntax or dollar signs ($ or $$). Use clean Unicode symbols instead (e.g. O(n log n), ->, <=, >=, ^ for exponents).\n"
+        "6. CLEAN COMPLETION: Ensure every list and section is fully closed with proper punctuation. Never leave a heading or bullet dangling."
     )
 
     def _process_quick_section(sec_data: tuple[int, list]) -> tuple[int, str]:
@@ -1057,7 +1127,9 @@ def _generate_sectional_notes(chunks: list[tuple[float, float, str]], video_titl
     for start, end, text in chunks:
         if (end - section_start) > section_duration and current_section:
             sections.append(current_section)
-            current_section = [(start, end, text)]
+            # Include boundary overlap chunk for seamless continuity
+            overlap = [current_section[-1]] if current_section else []
+            current_section = overlap + [(start, end, text)]
             section_start = start
         else:
             current_section.append((start, end, text))

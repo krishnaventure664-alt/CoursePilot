@@ -234,6 +234,36 @@ def save_quiz(course_id: int, video_id: str | None, quiz_json: str, set_index: i
             (course_id, video_id, set_index, quiz_json, time.time()),
         )
 
+def get_quiz_set_indices(course_id: int, video_id: str | None = None) -> list[int]:
+    with get_connection() as conn:
+        if video_id:
+            rows = conn.execute(
+                "SELECT DISTINCT set_index FROM course_quizzes WHERE course_id = ? AND video_id = ? ORDER BY set_index ASC",
+                (course_id, video_id),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT DISTINCT set_index FROM course_quizzes WHERE course_id = ? ORDER BY set_index ASC",
+                (course_id,),
+            ).fetchall()
+        return [r["set_index"] for r in rows if r["set_index"] is not None]
+
+
+def get_flashcard_set_indices(course_id: int, video_id: str | None = None) -> list[int]:
+    with get_connection() as conn:
+        if video_id:
+            rows = conn.execute(
+                "SELECT DISTINCT set_index FROM course_flashcards WHERE course_id = ? AND video_id = ? ORDER BY set_index ASC",
+                (course_id, video_id),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT DISTINCT set_index FROM course_flashcards WHERE course_id = ? ORDER BY set_index ASC",
+                (course_id,),
+            ).fetchall()
+        return [r["set_index"] for r in rows if r["set_index"] is not None]
+
+
 
 def get_flashcards(course_id: int, video_id: str | None = None, set_index: int | None = None):
     with get_connection() as conn:

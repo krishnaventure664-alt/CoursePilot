@@ -43,12 +43,10 @@ RELEVANCE_THRESHOLD = 0.025
 
 # Verified active production models prioritized by low-latency response speed
 GEMINI_MODELS = [
-    "gemini-2.0-flash",
     "gemini-flash-lite-latest",
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-3-flash-preview",
     "gemini-3.1-flash-lite-preview",
+    "gemini-2.5-flash",
+    "gemini-3-flash-preview",
 ]
 
 
@@ -63,9 +61,9 @@ def _build_prompt_content(question: str, language: str, sources: list[dict]) -> 
     evidence = "\n\n---\n\n".join(evidence_parts)
 
     lang_instructions = {
-        "english": "Write your answer in clear, fluent English. Translate any Hindi lecture terms accurately into English.",
-        "hindi": "Write your answer in natural Hindi using Devanagari script (हिंदी भाषा में उत्तर दें).",
-        "hinglish": "Write your answer in natural conversational Hinglish (Roman script Hindi mixed with English terms) as Indian college students speak.",
+        "english": "You MUST write your entire response in clear, fluent English. Even if the lecture was delivered in Hindi or Hinglish, explain the concepts, terms, and teacher examples accurately in English.",
+        "hindi": "आपको अपना पूरा उत्तर शुद्ध और स्पष्ट हिंदी (Devanagari script) में देना है। उदाहरण: 'शिक्षक ने समझाया है कि...' (हिंदी भाषा में ही उत्तर दें)।",
+        "hinglish": "You MUST write your entire response in natural, conversational Hinglish (Roman script Hindi mixed with standard technical English words, exactly as Indian university teachers and students speak in lectures). Example: 'Instructor ne explain kiya hai ki Narrow AI specific tasks ke liye use hoti hai...'.",
     }
     lang_rule = lang_instructions.get(language, lang_instructions["english"])
 
@@ -330,24 +328,36 @@ def generate_answer(question: str, course_id: int) -> dict:
                     pass
                 return res_payload
 
-        # 6. Local Ollama fallback (with repeat_penalty to eliminate Hinglish repetition loops)
+        # 6. Local Ollama fallback (only if Ollama daemon is actively running locally on port 11434)
         try:
-            response = ollama.chat(
-                model=OLLAMA_MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                options={
-                    "temperature": 0.2,
-                    "repeat_penalty": 1.25,
-                    "num_ctx": 4096,
-                    "num_predict": 700,
-                },
-            )
-            answer = response["message"]["content"].strip()
+            import socket
+            ollama_active = False
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(0.3)
+                    ollama_active = (s.connect_ex(("127.0.0.1", 11434)) == 0)
+            except Exception:
+                ollama_active = False
+
+            if ollama_active:
+                response = ollama.chat(
+                    model=OLLAMA_MODEL,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    options={
+                        "temperature": 0.2,
+                        "repeat_penalty": 1.25,
+                        "num_ctx": 4096,
+                        "num_predict": 700,
+                    },
+                )
+                answer = response["message"]["content"].strip()
+            else:
+                answer = FALLBACK_ANSWER
         except Exception as error:
-            logger.exception("Ollama generation failed: %s", error)
+            logger.warning("Ollama fallback failed/skipped: %s", error)
             return {"answer": FALLBACK_ANSWER, "sources": formatted_sources}
 
         if FALLBACK_ANSWER.lower() in answer.lower() and len(answer) < len(FALLBACK_ANSWER) + 30:

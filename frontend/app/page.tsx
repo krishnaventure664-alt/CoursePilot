@@ -310,9 +310,14 @@ export default function Home() {
   function handleSelectVideo(vid: string) {
     setNotesMode("single");
     setSelectedVideoId(vid);
+    setQuizSetInfo(null);
+    setCardsSetInfo(null);
+    setUserAnswers({});
+    setShowQuizResults(false);
+    setFlippedCardId(null);
     if (activeTab === "notes") void loadNotes(vid);
-    if (activeTab === "quiz") void loadQuiz(vid);
-    if (activeTab === "flashcards") void loadFlashcards(vid);
+    if (activeTab === "quiz") void loadQuiz(vid, false, 1);
+    if (activeTab === "flashcards") void loadFlashcards(vid, false, 1);
     prefetchStudyTools(vid);
   }
   const [videoSearch, setVideoSearch] = useState("");
@@ -372,6 +377,7 @@ export default function Home() {
   const [quizSetInfo, setQuizSetInfo] = useState<{
     set_index: number;
     total_sets: number;
+    available_sets?: number[];
     all_covered: boolean;
     message: string;
   } | null>(null);
@@ -383,6 +389,7 @@ export default function Home() {
   const [cardsSetInfo, setCardsSetInfo] = useState<{
     set_index: number;
     total_sets: number;
+    available_sets?: number[];
     all_covered: boolean;
     message: string;
   } | null>(null);
@@ -517,10 +524,10 @@ export default function Home() {
               void loadNotes(currentVid.video_id, currentCourseId, notesDepthRef.current, true);
             }
             if (currentVid && isVidReady && activeTabRef.current === "quiz" && quizRef.current.length === 0) {
-              void loadQuiz(currentVid.video_id, true);
+              void loadQuiz(currentVid.video_id, false);
             }
             if (currentVid && isVidReady && activeTabRef.current === "flashcards" && flashcardsRef.current.length === 0) {
-              void loadFlashcards(currentVid.video_id, true);
+              void loadFlashcards(currentVid.video_id, false);
             }
             if (currentVid && isVidReady) {
               prefetchStudyTools(currentVid.video_id, currentCourseId);
@@ -569,10 +576,10 @@ export default function Home() {
                   void loadNotes(targetVidId, updatedCurrent.id, notesDepthRef.current, true);
                 }
                 if (activeTabRef.current === "quiz" && quizRef.current.length === 0) {
-                  void loadQuiz(targetVidId, true);
+                  void loadQuiz(targetVidId, false);
                 }
                 if (activeTabRef.current === "flashcards" && flashcardsRef.current.length === 0) {
-                  void loadFlashcards(targetVidId, true);
+                  void loadFlashcards(targetVidId, false);
                 }
                 prefetchStudyTools(targetVidId, updatedCurrent.id);
               }
@@ -869,10 +876,11 @@ export default function Home() {
     }
   }
 
-  async function loadQuiz(vid?: string, refresh: boolean = false) {
+  async function loadQuiz(vid?: string, refresh: boolean = false, targetSet?: number) {
     const courseId = activeCourseRef.current?.id ?? activeCourse?.id;
     if (!courseId) return;
-    const cacheKey = `${courseId}_${vid || "ALL"}`;
+    const currentSetNum = targetSet !== undefined ? targetSet : (refresh ? "next" : (quizSetInfo?.set_index || 1));
+    const cacheKey = `${courseId}_${vid || "ALL"}_set_${currentSetNum}`;
 
     if (!refresh && quizMemoryCache.has(cacheKey)) {
       const cached = quizMemoryCache.get(cacheKey)!;
@@ -890,7 +898,7 @@ export default function Home() {
     setQuiz([]);
     setUserAnswers({});
     setShowQuizResults(false);
-    if (!refresh) {
+    if (!refresh && targetSet === undefined) {
       setQuizSetInfo(null);
     }
     try {
@@ -898,9 +906,11 @@ export default function Home() {
         ? `${API_URL}/courses/${courseId}/quiz?video_id=${vid}`
         : `${API_URL}/courses/${courseId}/quiz`;
       let url = base;
-      if (refresh) {
-        const nextSet = quizSetInfo ? quizSetInfo.set_index : 1;
-        url += `${url.includes("?") ? "&" : "?"}refresh=true&set_index=${nextSet}`;
+      const params: string[] = [];
+      if (refresh) params.push("refresh=true");
+      if (targetSet !== undefined) params.push(`set_index=${targetSet}`);
+      if (params.length > 0) {
+        url += (url.includes("?") ? "&" : "?") + params.join("&");
       }
       const res = await fetch(url);
       const data = await res.json();
@@ -908,11 +918,14 @@ export default function Home() {
       const sInfo = data.set_index !== undefined ? {
         set_index: data.set_index,
         total_sets: data.total_sets || 1,
+        available_sets: data.available_sets || [data.set_index],
         all_covered: !!data.all_covered,
         message: data.message || "",
       } : null;
       if (qList.length > 0) {
-        quizMemoryCache.set(cacheKey, { quiz: qList, setInfo: sInfo });
+        const storeKey = `${courseId}_${vid || "ALL"}_set_${sInfo?.set_index || 1}`;
+        quizMemoryCache.set(storeKey, { quiz: qList, setInfo: sInfo });
+        quizMemoryCache.set(`${courseId}_${vid || "ALL"}`, { quiz: qList, setInfo: sInfo });
       }
       setQuiz(qList);
       if (sInfo) {
@@ -925,10 +938,11 @@ export default function Home() {
     }
   }
 
-  async function loadFlashcards(vid?: string, refresh: boolean = false) {
+  async function loadFlashcards(vid?: string, refresh: boolean = false, targetSet?: number) {
     const courseId = activeCourseRef.current?.id ?? activeCourse?.id;
     if (!courseId) return;
-    const cacheKey = `${courseId}_${vid || "ALL"}`;
+    const currentSetNum = targetSet !== undefined ? targetSet : (refresh ? "next" : (cardsSetInfo?.set_index || 1));
+    const cacheKey = `${courseId}_${vid || "ALL"}_set_${currentSetNum}`;
 
     if (!refresh && cardsMemoryCache.has(cacheKey)) {
       const cached = cardsMemoryCache.get(cacheKey)!;
@@ -944,7 +958,7 @@ export default function Home() {
     setCardsLoading(true);
     setFlashcards([]);
     setFlippedCardId(null);
-    if (!refresh) {
+    if (!refresh && targetSet === undefined) {
       setCardsSetInfo(null);
     }
     try {
@@ -952,9 +966,11 @@ export default function Home() {
         ? `${API_URL}/courses/${courseId}/flashcards?video_id=${vid}`
         : `${API_URL}/courses/${courseId}/flashcards`;
       let url = base;
-      if (refresh) {
-        const nextSet = cardsSetInfo ? cardsSetInfo.set_index : 1;
-        url += `${url.includes("?") ? "&" : "?"}refresh=true&set_index=${nextSet}`;
+      const params: string[] = [];
+      if (refresh) params.push("refresh=true");
+      if (targetSet !== undefined) params.push(`set_index=${targetSet}`);
+      if (params.length > 0) {
+        url += (url.includes("?") ? "&" : "?") + params.join("&");
       }
       const res = await fetch(url);
       const data = await res.json();
@@ -962,11 +978,14 @@ export default function Home() {
       const sInfo = data.set_index !== undefined ? {
         set_index: data.set_index,
         total_sets: data.total_sets || 1,
+        available_sets: data.available_sets || [data.set_index],
         all_covered: !!data.all_covered,
         message: data.message || "",
       } : null;
       if (fcList.length > 0) {
-        cardsMemoryCache.set(cacheKey, { flashcards: fcList, setInfo: sInfo });
+        const storeKey = `${courseId}_${vid || "ALL"}_set_${sInfo?.set_index || 1}`;
+        cardsMemoryCache.set(storeKey, { flashcards: fcList, setInfo: sInfo });
+        cardsMemoryCache.set(`${courseId}_${vid || "ALL"}`, { flashcards: fcList, setInfo: sInfo });
       }
       setFlashcards(fcList);
       if (sInfo) {
@@ -1009,10 +1028,12 @@ export default function Home() {
             const sInfo = data.set_index !== undefined ? {
               set_index: data.set_index,
               total_sets: data.total_sets || 1,
+              available_sets: data.available_sets || [data.set_index],
               all_covered: !!data.all_covered,
               message: data.message || "",
             } : null;
             quizMemoryCache.set(quizKey, { quiz: qList, setInfo: sInfo });
+            quizMemoryCache.set(`${courseId}_${vid}_set_${sInfo?.set_index || 1}`, { quiz: qList, setInfo: sInfo });
             if (activeTabRef.current === "quiz" && selectedVideoIdRef.current === vid) {
               setQuiz(qList);
               if (sInfo) setQuizSetInfo(sInfo);
@@ -1031,10 +1052,12 @@ export default function Home() {
             const sInfo = data.set_index !== undefined ? {
               set_index: data.set_index,
               total_sets: data.total_sets || 1,
+              available_sets: data.available_sets || [data.set_index],
               all_covered: !!data.all_covered,
               message: data.message || "",
             } : null;
             cardsMemoryCache.set(cardKey, { flashcards: fcList, setInfo: sInfo });
+            cardsMemoryCache.set(`${courseId}_${vid}_set_${sInfo?.set_index || 1}`, { flashcards: fcList, setInfo: sInfo });
             if (activeTabRef.current === "flashcards" && selectedVideoIdRef.current === vid) {
               setFlashcards(fcList);
               if (sInfo) setCardsSetInfo(sInfo);
@@ -1053,26 +1076,30 @@ export default function Home() {
       else void loadNotes(selectedVideoId);
     } else if (tab === "quiz") {
       const courseId = activeCourseRef.current?.id ?? activeCourse?.id;
-      const cacheKey = `${courseId}_${targetVid || "ALL"}`;
-      if (quizMemoryCache.has(cacheKey)) {
-        const cached = quizMemoryCache.get(cacheKey)!;
+      const targetSetNum = quizSetInfo?.set_index || 1;
+      const cacheKey = `${courseId}_${targetVid || "ALL"}_set_${targetSetNum}`;
+      const fallbackKey = `${courseId}_${targetVid || "ALL"}`;
+      const cached = quizMemoryCache.get(cacheKey) || quizMemoryCache.get(fallbackKey);
+      if (cached && cached.quiz && cached.quiz.length > 0) {
         setQuiz(cached.quiz);
         setQuizSetInfo(cached.setInfo);
         setUserAnswers({});
         setShowQuizResults(false);
       } else {
-        void loadQuiz(targetVid);
+        void loadQuiz(targetVid, false, targetSetNum);
       }
     } else if (tab === "flashcards") {
       const courseId = activeCourseRef.current?.id ?? activeCourse?.id;
-      const cacheKey = `${courseId}_${targetVid || "ALL"}`;
-      if (cardsMemoryCache.has(cacheKey)) {
-        const cached = cardsMemoryCache.get(cacheKey)!;
+      const targetSetNum = cardsSetInfo?.set_index || 1;
+      const cacheKey = `${courseId}_${targetVid || "ALL"}_set_${targetSetNum}`;
+      const fallbackKey = `${courseId}_${targetVid || "ALL"}`;
+      const cached = cardsMemoryCache.get(cacheKey) || cardsMemoryCache.get(fallbackKey);
+      if (cached && cached.flashcards && cached.flashcards.length > 0) {
         setFlashcards(cached.flashcards);
         setCardsSetInfo(cached.setInfo);
         setFlippedCardId(null);
       } else {
-        void loadFlashcards(targetVid);
+        void loadFlashcards(targetVid, false, targetSetNum);
       }
     }
   }
@@ -1586,8 +1613,8 @@ export default function Home() {
     URL.revokeObjectURL(url);
   }
 
-  function downloadPdf() {
-    if (!notes) return;
+  async function downloadPdf() {
+    if (!notes || !activeCourse) return;
     const isMasterHandbook = notesMode === "all" || selectedVideoId === "ALL";
     const currentVideo = videos.find((v) => v.video_id === selectedVideoId);
     const title = isMasterHandbook
@@ -1595,9 +1622,46 @@ export default function Home() {
       : currentVideo ? currentVideo.title : activeCourse?.title || "Lecture Notes";
     const courseTitle = activeCourse?.title || "Course";
 
+    // Direct binary PDF download from backend
+    try {
+      const courseId = activeCourse.id;
+      let endpoint = "";
+      let filename = "";
+
+      if (isMasterHandbook) {
+        endpoint = notesDepth === "deep" ? "detailed-handbook-pdf" : "all-notes-pdf";
+        const cleanName = (activeCourse.title || "Course").replace(/[^a-zA-Z0-9_\-]/g, "_");
+        filename = `${cleanName}_${notesDepth === "deep" ? "Master_Handbook" : "Quick_Handbook"}.pdf`;
+      } else if (selectedVideoId) {
+        endpoint = notesDepth === "deep"
+          ? `detailed-notes-pdf?video_id=${selectedVideoId}`
+          : `notes-pdf?video_id=${selectedVideoId}`;
+        const cleanVid = (currentVideo?.title || selectedVideoId).replace(/[^a-zA-Z0-9_\-]/g, "_");
+        filename = `${cleanVid}_${notesDepth === "deep" ? "Deep_Notes" : "Quick_Notes"}.pdf`;
+      }
+
+      if (endpoint) {
+        const res = await authFetch(`${API_URL}/courses/${courseId}/${endpoint}`);
+        if (res.ok) {
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn("Direct PDF export failed, using printable window fallback:", e);
+    }
+
+    // Fallback printable view
     const printWin = window.open("", "_blank");
     if (!printWin) return;
-
     const fullHtml = generatePrintableNotesHtml(notes, title, courseTitle);
     printWin.document.write(fullHtml);
     printWin.document.close();
@@ -2276,35 +2340,36 @@ export default function Home() {
             {/* TAB: PRACTICE QUIZ */}
             {activeTab === "quiz" && (
               <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900">
-                <div className="flex items-center justify-between border-b border-zinc-200 pb-4 dark:border-zinc-800">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-zinc-200 pb-4 dark:border-zinc-800">
                   <div>
-                    <div className="flex items-center gap-2">
-                      <h2 className="text-base font-bold tracking-tight text-zinc-900 dark:text-white">
-                        Lecture Knowledge Check
-                      </h2>
-                      {quizSetInfo && (
-                        <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-[11px] font-semibold text-blue-800 dark:bg-blue-950 dark:text-blue-300">
-                          Set {quizSetInfo.set_index} of {quizSetInfo.total_sets}
-                        </span>
-                      )}
+                    <h2 className="text-base font-bold tracking-tight text-zinc-900 dark:text-white">
+                      Lecture Quiz
+                    </h2>
+                    <p className="text-xs text-zinc-500">
+                      {quiz.length > 0
+                        ? `${quiz.length} questions grounded in this lecture${quizSetInfo && quizSetInfo.total_sets > 1 ? ` (Set ${quizSetInfo.set_index} of ${quizSetInfo.total_sets})` : ""}`
+                        : "Questions grounded in this lecture."}
+                    </p>
+                  </div>
+                  {quizSetInfo && quizSetInfo.available_sets && quizSetInfo.available_sets.length > 1 && (
+                    <div className="flex items-center gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800">
+                      {quizSetInfo.available_sets.map((sNum) => (
+                        <button
+                          key={sNum}
+                          onClick={() => void loadQuiz(selectedVideoId === "ALL" ? undefined : selectedVideoId, false, sNum)}
+                          disabled={quizLoading}
+                          className={`cursor-pointer rounded-md px-2.5 py-1 text-xs font-medium transition-all ${
+                            quizSetInfo.set_index === sNum
+                              ? "bg-white text-zinc-900 shadow-xs dark:bg-zinc-900 dark:text-white font-semibold"
+                              : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white"
+                          }`}
+                        >
+                          Set {sNum}
+                        </button>
+                      ))}
                     </div>
-                    <p className="text-xs text-zinc-500">5 multiple choice questions grounded in this lecture section.</p>
-                  </div>
-                  <button
-                    onClick={() => void loadQuiz(selectedVideoId === "ALL" ? undefined : selectedVideoId, true)}
-                    disabled={quizLoading}
-                    className="cursor-pointer rounded-md border border-zinc-200 px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                  >
-                    {quizLoading ? "Loading..." : "New Quiz (Next Set)"}
-                  </button>
+                  )}
                 </div>
-
-                {quizSetInfo?.all_covered && (
-                  <div className="mt-4 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50/70 p-3 text-xs font-medium text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">
-                    <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-600 text-white"><svg className="h-2.5 w-2.5 stroke-current" fill="none" viewBox="0 0 24 24" strokeWidth="3"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg></span>
-                    <span>{quizSetInfo.message || "You have covered all questions & concepts from this lecture. Starting revision from Set 1."}</span>
-                  </div>
-                )}
 
                 {quizLoading ? (
                   <div className="my-16 text-center text-zinc-500">
@@ -2399,35 +2464,36 @@ export default function Home() {
             {/* TAB: FLASHCARDS */}
             {activeTab === "flashcards" && (
               <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-xs dark:border-zinc-800 dark:bg-zinc-900">
-                <div className="flex items-center justify-between border-b border-zinc-200 pb-4 dark:border-zinc-800">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-zinc-200 pb-4 dark:border-zinc-800">
                   <div>
-                    <div className="flex items-center gap-2">
-                      <h2 className="text-base font-bold tracking-tight text-zinc-900 dark:text-white">
-                        Spaced Repetition Flashcards
-                      </h2>
-                      {cardsSetInfo && (
-                        <span className="rounded-full bg-purple-100 px-2.5 py-0.5 text-[11px] font-semibold text-purple-800 dark:bg-purple-950 dark:text-purple-300">
-                          Set {cardsSetInfo.set_index} of {cardsSetInfo.total_sets}
-                        </span>
-                      )}
+                    <h2 className="text-base font-bold tracking-tight text-zinc-900 dark:text-white">
+                      Flashcards
+                    </h2>
+                    <p className="text-xs text-zinc-500">
+                      {flashcards.length > 0
+                        ? `${flashcards.length} cards grounded in this lecture${cardsSetInfo && cardsSetInfo.total_sets > 1 ? ` (Set ${cardsSetInfo.set_index} of ${cardsSetInfo.total_sets})` : ""} • Click to flip`
+                        : "Click any card to reveal its answer."}
+                    </p>
+                  </div>
+                  {cardsSetInfo && cardsSetInfo.available_sets && cardsSetInfo.available_sets.length > 1 && (
+                    <div className="flex items-center gap-1 rounded-lg bg-zinc-100 p-1 dark:bg-zinc-800">
+                      {cardsSetInfo.available_sets.map((sNum) => (
+                        <button
+                          key={sNum}
+                          onClick={() => void loadFlashcards(selectedVideoId === "ALL" ? undefined : selectedVideoId, false, sNum)}
+                          disabled={cardsLoading}
+                          className={`cursor-pointer rounded-md px-2.5 py-1 text-xs font-medium transition-all ${
+                            cardsSetInfo.set_index === sNum
+                              ? "bg-white text-zinc-900 shadow-xs dark:bg-zinc-900 dark:text-white font-semibold"
+                              : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-white"
+                          }`}
+                        >
+                          Set {sNum}
+                        </button>
+                      ))}
                     </div>
-                    <p className="text-xs text-zinc-500">Click any card to reveal its answer. Mark status to track retention.</p>
-                  </div>
-                  <button
-                    onClick={() => void loadFlashcards(selectedVideoId === "ALL" ? undefined : selectedVideoId, true)}
-                    disabled={cardsLoading}
-                    className="cursor-pointer rounded-md border border-zinc-200 px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                  >
-                    {cardsLoading ? "Loading..." : "New Cards (Next Set)"}
-                  </button>
+                  )}
                 </div>
-
-                {cardsSetInfo?.all_covered && (
-                  <div className="mt-4 flex items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3 text-xs font-medium text-zinc-800 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200">
-                    <span className="flex h-4 w-4 items-center justify-center rounded-full bg-zinc-900 text-white dark:bg-white dark:text-zinc-900"><svg className="h-2.5 w-2.5 stroke-current" fill="none" viewBox="0 0 24 24" strokeWidth="3"><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg></span>
-                    <span>{cardsSetInfo.message || "You have reviewed all key concepts from this lecture. Starting revision loop from Set 1."}</span>
-                  </div>
-                )}
 
                 {cardsLoading ? (
                   <div className="my-16 text-center text-zinc-500">
