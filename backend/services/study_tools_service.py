@@ -39,6 +39,10 @@ from services.course_db_service import (
 
     clear_flashcards,
 
+    get_quiz_set_count,
+
+    get_flashcard_set_count,
+
 )
 
 load_dotenv()
@@ -713,17 +717,38 @@ def get_or_generate_quiz(
     If force_refresh is True, advances to the next chronological set.
     When all sets covering the lecture are complete, it loops back to Set 1 and flags all_covered=True.
     """
-    # Fast path: instant return from SQLite cache without loading all chunks
-    if not force_refresh:
-        cached = get_cached_quiz(course_id, video_id, set_index=requested_set if requested_set is not None else None)
+    set_cnt = get_quiz_set_count(course_id, video_id)
+    effective_total = max(4, set_cnt) if set_cnt > 0 else 4
+
+    # Instant return from SQLite cache when requested set exists
+    if requested_set is not None:
+        target_s = requested_set % effective_total
+        all_cov = (requested_set >= effective_total)
+        msg = "🎉 You have covered all questions & concepts from this lecture! Starting revision from Set 1." if all_cov else ""
+        cached = get_cached_quiz(course_id, video_id, set_index=target_s)
         if cached and not contains_devanagari(cached.get("quiz_data", "")):
             try:
                 quiz_data = json.loads(cached["quiz_data"])
-                cur_set = cached.get("set_index", 0)
+                cur_set = cached.get("set_index", target_s)
                 return {
                     "quiz": quiz_data,
                     "set_index": cur_set + 1,
-                    "total_sets": max(2, cur_set + 1),
+                    "total_sets": effective_total,
+                    "all_covered": all_cov,
+                    "message": msg,
+                }
+            except Exception:
+                pass
+    elif not force_refresh:
+        # Default initial load: Set 1
+        cached = get_cached_quiz(course_id, video_id, set_index=0)
+        if cached and not contains_devanagari(cached.get("quiz_data", "")):
+            try:
+                quiz_data = json.loads(cached["quiz_data"])
+                return {
+                    "quiz": quiz_data,
+                    "set_index": 1,
+                    "total_sets": effective_total,
                     "all_covered": False,
                     "message": "",
                 }
@@ -761,8 +786,9 @@ No markdown code fences, raw JSON only."""
         return {"quiz": [], "set_index": 1, "total_sets": 1, "all_covered": False, "message": "No lecture content found."}
 
     total_dur = chunks[-1][1] - chunks[0][0] if chunks else 0.0
-    # Guarantee at least 4 progressive sets for all lectures
-    if len(chunks) <= 4:
+    if set_cnt >= 4:
+        total_sets = set_cnt
+    elif len(chunks) <= 4:
         total_sets = max(2, len(chunks))
     elif len(chunks) <= 8:
         total_sets = 4
@@ -774,6 +800,8 @@ No markdown code fences, raw JSON only."""
     if requested_set is not None:
         target_set = requested_set % total_sets
         all_covered = (requested_set >= total_sets)
+        if all_covered:
+            message = "🎉 You have covered all questions & concepts from this lecture! Starting revision from Set 1."
     elif force_refresh:
         latest = get_cached_quiz(course_id, video_id)
         last_set = latest.get("set_index", 0) if latest else 0
@@ -785,8 +813,7 @@ No markdown code fences, raw JSON only."""
         else:
             target_set = next_set
     else:
-        latest = get_cached_quiz(course_id, video_id)
-        target_set = latest.get("set_index", 0) if latest else 0
+        target_set = 0
 
     cached = get_cached_quiz(course_id, video_id, set_index=target_set)
     if cached and (not force_refresh or all_covered or requested_set is not None):
@@ -905,15 +932,32 @@ def get_or_generate_flashcards(
     If force_refresh is True, advances to the next chronological set.
     When all sets covering the lecture are complete, it loops back to Set 1 and flags all_covered=True.
     """
-    # Fast path: instant return from SQLite cache without loading all chunks
-    if not force_refresh:
-        existing_set = get_flashcards(course_id, video_id, set_index=requested_set if requested_set is not None else None)
+    set_cnt = get_flashcard_set_count(course_id, video_id)
+    effective_total = max(4, set_cnt) if set_cnt > 0 else 4
+
+    # Instant return from SQLite cache when requested set exists
+    if requested_set is not None:
+        target_s = requested_set % effective_total
+        all_cov = (requested_set >= effective_total)
+        msg = "🎉 You have reviewed all key concepts from this lecture! Starting revision loop from Set 1." if all_cov else ""
+        existing_set = get_flashcards(course_id, video_id, set_index=target_s)
         if existing_set and not any(contains_devanagari(c.get("front", "") + c.get("back", "") + c.get("category", "")) for c in existing_set):
-            cur_set = existing_set[0].get("set_index", 0) if existing_set else 0
+            cur_set = existing_set[0].get("set_index", target_s) if existing_set else target_s
             return {
                 "flashcards": existing_set,
                 "set_index": cur_set + 1,
-                "total_sets": max(2, cur_set + 1),
+                "total_sets": effective_total,
+                "all_covered": all_cov,
+                "message": msg,
+            }
+    elif not force_refresh:
+        # Default initial load: Set 1
+        existing_set = get_flashcards(course_id, video_id, set_index=0)
+        if existing_set and not any(contains_devanagari(c.get("front", "") + c.get("back", "") + c.get("category", "")) for c in existing_set):
+            return {
+                "flashcards": existing_set,
+                "set_index": 1,
+                "total_sets": effective_total,
                 "all_covered": False,
                 "message": "",
             }
@@ -949,8 +993,9 @@ No markdown code fences, raw JSON only."""
         return {"flashcards": [], "set_index": 1, "total_sets": 1, "all_covered": False, "message": "No lecture content found."}
 
     total_dur = chunks[-1][1] - chunks[0][0] if chunks else 0.0
-    # Guarantee at least 4 progressive sets for all lectures
-    if len(chunks) <= 4:
+    if set_cnt >= 4:
+        total_sets = set_cnt
+    elif len(chunks) <= 4:
         total_sets = max(2, len(chunks))
     elif len(chunks) <= 8:
         total_sets = 4
@@ -962,6 +1007,8 @@ No markdown code fences, raw JSON only."""
     if requested_set is not None:
         target_set = requested_set % total_sets
         all_covered = (requested_set >= total_sets)
+        if all_covered:
+            message = "🎉 You have reviewed all key concepts from this lecture! Starting revision loop from Set 1."
     elif force_refresh:
         existing_all = get_flashcards(course_id, video_id)
         last_set = max((c.get("set_index", 0) for c in existing_all), default=0)
@@ -973,8 +1020,7 @@ No markdown code fences, raw JSON only."""
         else:
             target_set = next_set
     else:
-        existing_all = get_flashcards(course_id, video_id)
-        target_set = max((c.get("set_index", 0) for c in existing_all), default=0)
+        target_set = 0
 
     existing_set = get_flashcards(course_id, video_id, set_index=target_set)
     if existing_set and (not force_refresh or all_covered or requested_set is not None):

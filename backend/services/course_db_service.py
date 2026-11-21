@@ -235,6 +235,36 @@ def save_quiz(course_id: int, video_id: str | None, quiz_json: str, set_index: i
         )
 
 
+def get_quiz_set_count(course_id: int, video_id: str | None = None) -> int:
+    with get_connection() as conn:
+        if video_id:
+            row = conn.execute(
+                "SELECT count(DISTINCT set_index) FROM course_quizzes WHERE course_id = ? AND video_id = ?",
+                (course_id, video_id),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT count(DISTINCT set_index) FROM course_quizzes WHERE course_id = ?",
+                (course_id,),
+            ).fetchone()
+        return row[0] if row else 0
+
+
+def get_flashcard_set_count(course_id: int, video_id: str | None = None) -> int:
+    with get_connection() as conn:
+        if video_id:
+            row = conn.execute(
+                "SELECT count(DISTINCT set_index) FROM course_flashcards WHERE course_id = ? AND video_id = ?",
+                (course_id, video_id),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT count(DISTINCT set_index) FROM course_flashcards WHERE course_id = ?",
+                (course_id,),
+            ).fetchone()
+        return row[0] if row else 0
+
+
 def get_flashcards(course_id: int, video_id: str | None = None, set_index: int | None = None):
     with get_connection() as conn:
         if video_id:
