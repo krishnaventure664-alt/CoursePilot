@@ -15,31 +15,59 @@ def extract_playlist_id(url: str):
 
 
 def get_playlist_videos(playlist_id: str):
-    url = "https://www.googleapis.com/youtube/v3/playlistItems"
-
     videos = []
-    next_page_token = None
+    
+    # 1. Try Google YouTube Data API if key is present
+    if YOUTUBE_API_KEY:
+        url = "https://www.googleapis.com/youtube/v3/playlistItems"
+        next_page_token = None
+        try:
+            while True:
+                params = {
+                    "part": "snippet",
+                    "playlistId": playlist_id,
+                    "maxResults": 50,
+                    "key": YOUTUBE_API_KEY
+                }
+                if next_page_token:
+                    params["pageToken"] = next_page_token
 
-    while True:
-        params = {
-            "part": "snippet",
-            "playlistId": playlist_id,
-            "maxResults": 50,
-            "key": YOUTUBE_API_KEY
-        }
+                response = requests.get(url, params=params, timeout=10)
+                data = response.json()
+                items = data.get("items", [])
+                if not items:
+                    break
+                videos.extend(items)
+                next_page_token = data.get("nextPageToken")
+                if not next_page_token:
+                    break
+        except Exception as e:
+            print(f"YouTube Data API error for playlist: {e}")
 
-        if next_page_token:
-            params["pageToken"] = next_page_token
-
-        response = requests.get(url, params=params)
-        data = response.json()
-
-        videos.extend(data.get("items", []))
-
-        next_page_token = data.get("nextPageToken")
-
-        if not next_page_token:
-            break
+    # 2. Fallback: extract playlist via yt-dlp (works with zero API key)
+    if not videos:
+        try:
+            import yt_dlp
+            ydl_opts = {
+                "extract_flat": True,
+                "quiet": True,
+                "no_warnings": True,
+                "skip_download": True,
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(f"https://www.youtube.com/playlist?list={playlist_id}", download=False)
+                for entry in (info.get("entries") or []):
+                    vid = entry.get("id")
+                    if vid:
+                        videos.append({
+                            "snippet": {
+                                "title": entry.get("title", f"Video {vid}"),
+                                "resourceId": {"videoId": vid},
+                                "description": entry.get("description", ""),
+                            }
+                        })
+        except Exception as ydl_err:
+            print(f"yt-dlp playlist extraction fallback error: {ydl_err}")
 
     return {
         "items": videos

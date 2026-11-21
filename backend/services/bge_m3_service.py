@@ -75,20 +75,24 @@ def encode_texts(texts):
         }
 
     model = get_bge_m3_model()
-    # Batch size 16 keeps peak activation memory well under RTX 3050 VRAM limits
-    result = model.encode(texts, batch_size=16)
+    if model is not None:
+        # Batch size 16 keeps peak activation memory well under RTX 3050 VRAM limits
+        result = model.encode(texts, batch_size=16)
+        dense = result["dense_vecs"]
+        sparse = result["lexical_weights"]
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+        return {
+            "dense": dense,
+            "sparse": sparse,
+        }
 
-    dense = result["dense_vecs"]
-    sparse = result["lexical_weights"]
-
-    try:
-        import torch
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    except Exception:
-        pass
-
+    # Cloud lightweight fallback: 1024-dim zero vectors
     return {
-        "dense": dense,
-        "sparse": sparse,
+        "dense": [[0.0] * 1024 for _ in texts],
+        "sparse": [{} for _ in texts],
     }

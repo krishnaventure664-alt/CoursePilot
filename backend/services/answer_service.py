@@ -46,12 +46,11 @@ RELEVANCE_THRESHOLD = 0.01
 
 # Verified active production models prioritized by low-latency response speed
 GEMINI_MODELS = [
-    "gemini-2.5-flash",
-    "gemini-flash-latest",
-    "gemini-2.5-flash-lite",
     "gemini-flash-lite-latest",
     "gemini-3.1-flash-lite",
-    "gemini-3.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-flash-latest",
 ]
 
 
@@ -126,7 +125,7 @@ def _generate_with_gemini(system_prompt: str, user_prompt: str, api_key: str) ->
         }
 
         try:
-            res = http_session.post(url, json=payload, timeout=5)
+            res = http_session.post(url, json=payload, timeout=10)
             if res.status_code == 200:
                 data = res.json()
                 candidates = data.get("candidates", [])
@@ -142,7 +141,7 @@ def _generate_with_gemini(system_prompt: str, user_prompt: str, api_key: str) ->
                     "temperature": 0.1,
                     "maxOutputTokens": 800,
                 }
-                res_retry = http_session.post(url, json=payload, timeout=5)
+                res_retry = http_session.post(url, json=payload, timeout=10)
                 if res_retry.status_code == 200:
                     cand = res_retry.json().get("candidates", [])
                     if cand and "content" in cand[0]:
