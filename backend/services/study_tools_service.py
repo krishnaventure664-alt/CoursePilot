@@ -523,10 +523,14 @@ def get_or_generate_notes(course_id: int, video_id: str, force_refresh: bool = F
                     if r_c: c_title = r_c["title"]
             except Exception:
                 pass
-            prompt = f"""Generate concise, high-yield bulleted revision notes for:
+            prompt = f"""Generate comprehensive, high-yield bulleted revision notes for:
 Course: {c_title or 'Engineering'}
 Lecture: {v_title or video_id}
-Format: Markdown with clean bullet points, core definitions, and exam takeaways. Do NOT use LaTeX math ($)."""
+
+Requirements:
+- Complete chronological coverage of all topics, core definitions, formulas, and exam takeaways from start to finish.
+- Zero content skipped: every single sub-topic taught must have clear bullet points without cuts.
+- Format: Clean Markdown bullet points with bold keywords. Do NOT use LaTeX math ($)."""
             gen = _call_gemini(prompt, max_output_tokens=4096)
             if gen and len(gen) > 50:
                 save_notes(course_id, video_id, gen)
@@ -1003,10 +1007,11 @@ def _generate_sectional_quick_notes(chunks: list[tuple[float, float, str]], vide
 
     total_secs = len(sections)
     system_prompt = (
-        "You are an expert tutor creating concise, high-yield Quick Revision Notes based EXCLUSIVELY on the transcript.\n"
-        "ZERO OUTSIDE KNOWLEDGE. Strictly grounded in what was spoken by the instructor.\n"
-        "NO LATEX. Use clean Unicode symbols.\n"
-        "Generate 6 to 10 punchy, high-yield bullet points capturing EVERY key concept, formula, scheme year, and question/MCQ answer taught in this section."
+        "You are an expert university tutor creating complete, high-yield Quick Revision Notes based EXCLUSIVELY on the transcript.\n"
+        "ZERO OUTSIDE KNOWLEDGE: Strictly grounded in what was spoken by the instructor.\n"
+        "ZERO CONTENT SKIPPED: Cover EVERY topic, rule, formula, scheme year, and question taught in this section from start to end without omission.\n"
+        "NO LATEX: Use clean Unicode symbols.\n"
+        "Generate punchy, high-yield bullet points capturing ALL concepts and questions taught in this section chronologically without skipping any topic."
     )
 
     def _process_quick_section(sec_data: tuple[int, list]) -> tuple[int, str]:
@@ -1174,9 +1179,10 @@ def _generate_sectional_notes(chunks: list[tuple[float, float, str]], video_titl
 
     system_prompt = (
         "You are an expert university professor creating publication-grade, exhaustive study notes based EXCLUSIVELY on the provided lecture transcript.\n\n"
-        "ABSOLUTE ZERO-OUTSIDE-KNOWLEDGE RULES:\n"
+        "ABSOLUTE ZERO-OMISSION & STRICT GROUNDING RULES:\n"
         "1. STRICT FACTUAL GROUNDING: Base every note, formula, theorem, question, and explanation ONLY on what was actually spoken, taught, or demonstrated by the instructor in this section.\n"
-        "2. ZERO OUTSIDE ADDITIONS: Do NOT introduce external textbook concepts, history, or algorithms not taught.\n"
+        "2. ZERO CONTENT SKIPPED: Do NOT cut, summarize away, or omit any concept, proof, step, whiteboard diagram, example, or problem taught by the instructor. Every single idea taught from the first second to the last second must be thoroughly documented in full depth.\n"
+        "3. ZERO OUTSIDE ADDITIONS: Do NOT introduce external textbook concepts, history, or algorithms not taught.\n"
         "3. ADAPTIVE LECTURE FORMAT:\n"
         "   A. IF THE INSTRUCTOR IS SOLVING MCQs, PYQs, OR PRACTICE QUESTIONS:\n"
         "      - You MUST list EVERY SINGLE QUESTION discussed in chronological order. Never condense or skip any question!\n"
@@ -1302,9 +1308,10 @@ Course: {c_title or 'Engineering / Computer Science'}
 Lecture: {topic_label}
 
 Requirements:
-- Markdown formatted with ## and ### headings, definitions, architectural explanations, protocol flows, and formula derivations.
-- Include an 'AKTU Exam Tips & High-Yield Questions' section.
-- Write at least 800 words of thorough, exam-ready content.
+- ZERO-OMISSION COVERAGE: Cover every concept, architectural layer, protocol state transition, definition, and formula relevant to this topic. Nothing must be skipped or cut.
+- Markdown formatted with ## and ### headings, step-by-step numbered derivations, ASCII/Unicode protocol flows, comparison tables, and solved numerical problems.
+- Include an 'AKTU Exam High-Yield PYQs & Problem-Solving Strategies' section.
+- Write an in-depth, textbook-grade master study guide (at least 1500 words).
 - Do NOT use LaTeX math ($). Use plain text or Unicode symbols."""
         generated = _call_gemini(prompt, max_output_tokens=8192)
         if generated and len(generated) > 100:

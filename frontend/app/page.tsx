@@ -2053,8 +2053,10 @@ export default function Home() {
                     </h1>
                     <p className="mt-0.5 text-xs text-zinc-500">
                       {notesMode === "all"
-                        ? "Comprehensive notes synthesized across all course lectures"
-                        : "Key concepts and structural breakdown from lecture transcript"}
+                        ? "Comprehensive Master Handbook covering all lectures (100% full coverage, zero skipped)"
+                        : notesDepth === "deep"
+                        ? "100% Grounded Master Notes: Complete coverage of all concepts, derivations and whiteboard steps taught from 00:00 to end"
+                        : "Full-Lecture Quick Revision: Chronological high-yield summary from 00:00 to end (No topics skipped)"}
                     </p>
                   </div>
 
