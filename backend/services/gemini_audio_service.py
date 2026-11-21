@@ -13,26 +13,16 @@ load_dotenv("backend/.env")
 logger = logging.getLogger(__name__)
 
 GEMINI_MODELS = [
-    "gemini-flash-lite-latest",
-    "gemini-3.1-flash-lite",
-    "gemini-3.1-flash-lite-preview",
-    "gemini-2.5-flash",
     "gemini-3-flash-preview",
+    "gemini-3.1-flash-lite-preview",
+    "gemini-3.1-flash-lite",
+    "gemini-flash-lite-latest",
+    "gemini-2.5-flash",
 ]
 
 
-def get_ffmpeg_binary() -> str:
-    """Return path to ffmpeg binary, favoring bundled static binary from imageio-ffmpeg."""
-    try:
-        import imageio_ffmpeg
-        return imageio_ffmpeg.get_ffmpeg_exe()
-    except Exception:
-        return "ffmpeg"
-
-
 def get_audio_duration(audio_path: str) -> float:
-    """Get the duration of an audio file in seconds using ffprobe or ffmpeg."""
-    # 1. Try ffprobe
+    """Get the duration of an audio file in seconds using ffprobe."""
     try:
         cmd = [
             "ffprobe",
@@ -43,30 +33,9 @@ def get_audio_duration(audio_path: str) -> float:
         ]
         res = subprocess.run(cmd, capture_output=True, text=True, check=True)
         data = json.loads(res.stdout)
-        dur = float(data.get("format", {}).get("duration", 0.0))
-        if dur > 0:
-            return dur
-    except Exception:
-        pass
-
-    # 2. Try ffmpeg output duration regex
-    try:
-        ffmpeg_bin = get_ffmpeg_binary()
-        cmd = [ffmpeg_bin, "-i", audio_path]
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        # Output looks like: Duration: 01:25:39.45, start: 0.000000, bitrate: 64 kb/s
-        match = re.search(r"Duration:\s*(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)", res.stderr)
-        if match:
-            h, m, s = match.groups()
-            return int(h) * 3600 + int(m) * 60 + float(s)
+        return float(data.get("format", {}).get("duration", 0.0))
     except Exception as e:
-        logger.warning(f"ffmpeg duration check failed for {audio_path}: {e}")
-
-    # 3. Fallback: estimate from file size (assuming ~48kbps opus/webm)
-    try:
-        f_size = os.path.getsize(audio_path)
-        return max(60.0, f_size / (6000.0))
-    except Exception:
+        logger.warning(f"ffprobe failed for {audio_path}: {e}")
         return 0.0
 
 
@@ -81,9 +50,8 @@ def compress_and_slice_audio(
     Fast seeking with -ss before -i executes in under 1 second.
     """
     try:
-        ffmpeg_bin = get_ffmpeg_binary()
         cmd = [
-            ffmpeg_bin,
+            "ffmpeg",
             "-y",
             "-ss", str(start_sec),
             "-i", audio_path,
@@ -111,15 +79,12 @@ def upload_audio_to_gemini(file_path: str, api_key: str) -> dict | None:
     Returns dict with 'uri' and 'name' (for later deletion).
     """
     f_size = os.path.getsize(file_path)
-    ext = os.path.splitext(file_path)[1].lower().lstrip(".")
-    mime_type = "audio/webm" if ext == "webm" else ("audio/mp4" if ext in ["m4a", "mp4"] else "audio/mp3")
-
     upload_url = f"https://generativelanguage.googleapis.com/upload/v1beta/files?key={api_key}"
     headers = {
         "X-Goog-Upload-Protocol": "resumable",
         "X-Goog-Upload-Command": "start",
         "X-Goog-Upload-Header-Content-Length": str(f_size),
-        "X-Goog-Upload-Header-Content-Type": mime_type,
+        "X-Goog-Upload-Header-Content-Type": "audio/mp3",
         "Content-Type": "application/json",
     }
 
@@ -219,7 +184,6 @@ def transcribe_audio_slice(
     api_key: str,
     time_offset: float = 0.0,
     video_title: str = "",
-    mime_type: str = "audio/mp3",
 ) -> list[dict]:
     """
     Transcribe an audio slice using Gemini Audio Understanding.
@@ -248,7 +212,7 @@ FORMAT REQUIREMENTS:
         "contents": [
             {
                 "parts": [
-                    {"file_data": {"mime_type": mime_type, "file_uri": file_uri}},
+                    {"file_data": {"mime_type": "audio/mp3", "file_uri": file_uri}},
                     {"text": prompt},
                 ]
             }
@@ -383,25 +347,6 @@ def transcribe_audio_file_with_gemini(
             os.rmdir(temp_dir)
     except OSError:
         pass
-
-    if not all_segments:
-        # Fallback: direct upload of full audio file to Gemini File API
-        try:
-            logger.info("Slicing produced 0 segments, attempting direct upload of full audio to Gemini...")
-            ext = os.path.splitext(audio_path)[1].lower().lstrip(".")
-            direct_mime = "audio/webm" if ext == "webm" else ("audio/mp4" if ext in ["m4a", "mp4"] else "audio/mp3")
-            file_meta = upload_audio_to_gemini(audio_path, api_key)
-            if file_meta:
-                f_uri = file_meta.get("uri")
-                f_name = file_meta.get("name")
-                try:
-                    direct_segs = transcribe_audio_slice(f_uri, api_key, time_offset=0.0, video_title=video_title, mime_type=direct_mime)
-                    if direct_segs:
-                        all_segments = direct_segs
-                finally:
-                    delete_gemini_file(f_name, api_key)
-        except Exception as direct_err:
-            logger.warning(f"Direct Gemini transcription failed: {direct_err}")
 
     # Sort all segments chronologically
     all_segments.sort(key=lambda x: x["start"])

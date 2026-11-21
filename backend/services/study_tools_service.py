@@ -39,10 +39,6 @@ from services.course_db_service import (
 
     clear_flashcards,
 
-    get_quiz_set_count,
-
-    get_flashcard_set_count,
-
 )
 
 load_dotenv()
@@ -53,10 +49,9 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
 GEMINI_MODELS = [
     "gemini-2.5-flash",
-    "gemini-flash-lite-latest",
-    "gemini-3.1-flash-lite",
-    "gemini-3.1-flash-lite-preview",
     "gemini-3-flash-preview",
+    "gemini-flash-lite-latest",
+    "gemini-3.1-flash-lite-preview",
 ]
 
 # Persistent session with connection pooling for low-latency concurrent API calls
@@ -197,7 +192,7 @@ def _call_gemini(prompt: str, system_instruction: str = "", max_output_tokens: i
 
             try:
 
-                res = http_session.post(url, json=payload, timeout=15)
+                res = http_session.post(url, json=payload, timeout=30)
 
                 if res.status_code == 200:
 
@@ -261,7 +256,7 @@ def _call_gemini(prompt: str, system_instruction: str = "", max_output_tokens: i
 
                             cont_payload["system_instruction"] = {"parts": [{"text": system_instruction}]}
 
-                        c_res = http_session.post(url, json=cont_payload, timeout=15)
+                        c_res = http_session.post(url, json=cont_payload, timeout=30)
 
                         if c_res.status_code == 200:
 
@@ -315,155 +310,27 @@ def invalidate_lecture_chunks_cache(course_id: int | None = None, video_id: str 
             for k in keys_to_del:
                 _lecture_chunks_cache.pop(k, None)
 
-def _split_markdown_into_chunks(content: str, total_duration: float = 3600.0) -> list[tuple[float, float, str]]:
-    """Splits markdown notes into substantial, cohesive technical chunks without isolated headers."""
-    if not content:
-        return []
-    import re
-    raw_sections = re.split(r'(?=\n#{1,4}\s+)', content)
-    merged_sections = []
-    buffer = ""
-    for sec in raw_sections:
-        s = sec.strip()
-        if not s:
-            continue
-        # Merge short headers (< 250 chars) into the subsequent body section
-        if len(s) < 250:
-            if buffer:
-                buffer += "\n\n" + s
-            else:
-                buffer = s
-        else:
-            if buffer:
-                merged_sections.append(buffer + "\n\n" + s)
-                buffer = ""
-            else:
-                merged_sections.append(s)
-    if buffer:
-        if merged_sections:
-            merged_sections[-1] += "\n\n" + buffer
-        else:
-            merged_sections.append(buffer)
-
-    final_sections = []
-    for sec in merged_sections:
-        if len(sec) > 3000:
-            paras = sec.split("\n\n")
-            p_buf = ""
-            for p in paras:
-                if len(p_buf) + len(p) > 2000 and len(p_buf) >= 400:
-                    final_sections.append(p_buf.strip())
-                    p_buf = p
-                else:
-                    p_buf = (p_buf + "\n\n" + p).strip()
-            if p_buf:
-                final_sections.append(p_buf.strip())
-        else:
-            final_sections.append(sec)
-
-    dur = max(3600.0, total_duration)
-    n = max(1, len(final_sections))
-    step = dur / n
-    chunks = []
-    for i, sec in enumerate(final_sections):
-        start = i * step
-        end = (i + 1) * step
-        chunks.append((start, end, sec))
-    return chunks
-
-
 def _get_lecture_chunks(course_id: int, video_id: str | None = None) -> list[tuple[float, float, str]]:
     """Fetch all indexed chunks with timestamps, sorted chronologically from 0:00 to end with 0ms in-memory cache."""
     try:
-        from services.course_db_service import get_canonical_course_id, get_connection
+        from services.course_db_service import get_canonical_course_id
         effective_course_id = get_canonical_course_id(course_id)
         cache_key = (effective_course_id, video_id)
         with _chunks_cache_lock:
             if cache_key in _lecture_chunks_cache:
                 return _lecture_chunks_cache[cache_key]
 
-        chunks = []
-
-        # 1. Fetch high-grade detailed notes from SQLite if available
-        note_content = ""
-        try:
-            with get_connection() as conn:
-                if video_id:
-                    row = conn.execute("SELECT content FROM video_detailed_notes WHERE course_id = ? AND video_id = ?", (effective_course_id, video_id)).fetchone()
-                    if not row or not row["content"]:
-                        row = conn.execute("SELECT content FROM video_notes WHERE course_id = ? AND video_id = ?", (effective_course_id, video_id)).fetchone()
-                    note_content = row["content"] if row else ""
-                else:
-                    rows = conn.execute("SELECT content FROM video_detailed_notes WHERE course_id = ? ORDER BY id ASC", (effective_course_id,)).fetchall()
-                    if not rows:
-                        rows = conn.execute("SELECT content FROM video_notes WHERE course_id = ? ORDER BY id ASC", (effective_course_id,)).fetchall()
-                    note_content = "\n\n".join(r["content"] for r in rows if r["content"])
-        except Exception:
-            pass
-
-        # 2. Query ChromaDB collection
         where = {"video_id": video_id} if video_id else {"course_id": effective_course_id}
         results = collection.get(where=where, include=["documents", "metadatas"])
         documents = results.get("documents", [])
         metadatas = results.get("metadatas", [])
-        chroma_chunks = []
+        chunks = []
         if documents:
             for doc, meta in zip(documents, metadatas):
                 start = meta.get("start", 0.0) if meta else 0.0
                 end = meta.get("end", start + 60.0) if meta else start + 60.0
-                chroma_chunks.append((start, end, doc))
-            chroma_chunks.sort(key=lambda x: x[0])
-
-        chroma_len = sum(len(c[2]) for c in chroma_chunks)
-        # Prioritize authentic spoken lecture transcripts from ChromaDB whenever available
-        if chroma_chunks and len(chroma_chunks) >= 4 and chroma_len >= 1000:
-            chunks = chroma_chunks
-        elif note_content:
-            chunks = _split_markdown_into_chunks(note_content, total_duration=max(3600.0, float(len(chroma_chunks) * 60)))
-        else:
-            chunks = chroma_chunks
-
-        if not chunks:
-            try:
-                from services.hybrid_search_service import _get_seed_chunks
-                seed_chunks = _get_seed_chunks()
-                for c in seed_chunks:
-                    meta = c.get("metadata", {})
-                    c_vid = meta.get("video_id")
-                    c_cid = meta.get("course_id")
-                    if video_id and str(c_vid) == str(video_id):
-                        chunks.append((float(meta.get("start", 0.0)), float(meta.get("end", 60.0)), c["document"]))
-                    elif not video_id and str(c_cid) == str(effective_course_id):
-                        chunks.append((float(meta.get("start", 0.0)), float(meta.get("end", 60.0)), c["document"]))
-                if chunks:
-                    chunks.sort(key=lambda x: x[0])
-            except Exception:
-                pass
-
-        # Clean chunks: merge any residual chunk < 250 chars into adjacent chunk so no isolated header chunk remains
-        clean_chunks = []
-        buf_c = None
-        for c in chunks:
-            c_text = c[2].strip()
-            if len(c_text) < 250:
-                if buf_c:
-                    buf_c = (buf_c[0], c[1], buf_c[2] + "\n\n" + c_text)
-                else:
-                    buf_c = c
-            else:
-                if buf_c:
-                    clean_chunks.append((buf_c[0], c[1], buf_c[2] + "\n\n" + c_text))
-                    buf_c = None
-                else:
-                    clean_chunks.append(c)
-        if buf_c:
-            if clean_chunks:
-                clean_chunks[-1] = (clean_chunks[-1][0], buf_c[1], clean_chunks[-1][2] + "\n\n" + buf_c[2])
-            else:
-                clean_chunks.append(buf_c)
-
-        chunks = clean_chunks if clean_chunks else chunks
-
+                chunks.append((start, end, doc))
+            chunks.sort(key=lambda x: x[0])
         with _chunks_cache_lock:
             if len(_lecture_chunks_cache) > 150:
                 _lecture_chunks_cache.pop(next(iter(_lecture_chunks_cache)))
@@ -472,6 +339,7 @@ def _get_lecture_chunks(course_id: int, video_id: str | None = None) -> list[tup
     except Exception as e:
         logger.error("Failed to retrieve chunks: %s", e)
         return []
+
 
 def _get_lecture_text(course_id: int, video_id: str | None = None) -> str:
 
@@ -607,29 +475,6 @@ def get_or_generate_notes(course_id: int, video_id: str, force_refresh: bool = F
     try:
         chunks = _get_lecture_chunks(course_id, video_id)
         if not chunks:
-            # AI Syllabus Fallback
-            v_title, c_title = "", ""
-            try:
-                from services.course_db_service import get_connection
-                with get_connection() as conn:
-                    r_v = conn.execute("SELECT title FROM course_videos WHERE video_id = ?", (video_id,)).fetchone()
-                    if r_v: v_title = r_v["title"]
-                    r_c = conn.execute("SELECT title FROM courses WHERE id = ?", (course_id,)).fetchone()
-                    if r_c: c_title = r_c["title"]
-            except Exception:
-                pass
-            prompt = f"""Generate comprehensive, high-yield bulleted revision notes for:
-Course: {c_title or 'Engineering'}
-Lecture: {v_title or video_id}
-
-Requirements:
-- Complete chronological coverage of all topics, core definitions, formulas, and exam takeaways from start to finish.
-- Zero content skipped: every single sub-topic taught must have clear bullet points without cuts.
-- Format: Clean Markdown bullet points with bold keywords. Do NOT use LaTeX math ($)."""
-            gen = _call_gemini(prompt, max_output_tokens=4096)
-            if gen and len(gen) > 50:
-                save_notes(course_id, video_id, gen)
-                return {"notes": sanitize_text(gen), "cached": False}
             return {"notes": "No lecture content found to generate notes.", "cached": False}
 
         total_dur = chunks[-1][1] - chunks[0][0] if chunks else 0.0
@@ -717,36 +562,17 @@ def get_or_generate_quiz(
     If force_refresh is True, advances to the next chronological set.
     When all sets covering the lecture are complete, it loops back to Set 1 and flags all_covered=True.
     """
-    set_cnt = get_quiz_set_count(course_id, video_id)
-
-    # 1. Fast cache check: if this specific set is already cached in database, return immediately (< 1ms)
-    if requested_set is not None:
-        cached = get_cached_quiz(course_id, video_id, set_index=requested_set)
+    # Fast path: instant return from SQLite cache without loading all chunks
+    if not force_refresh:
+        cached = get_cached_quiz(course_id, video_id, set_index=requested_set if requested_set is not None else None)
         if cached and not contains_devanagari(cached.get("quiz_data", "")):
             try:
                 quiz_data = json.loads(cached["quiz_data"])
-                cur_set = cached.get("set_index", requested_set)
-                disp_total = max(4, set_cnt, requested_set + 1)
+                cur_set = cached.get("set_index", 0)
                 return {
                     "quiz": quiz_data,
                     "set_index": cur_set + 1,
-                    "total_sets": disp_total,
-                    "all_covered": False,
-                    "message": "",
-                }
-            except Exception:
-                pass
-    elif not force_refresh:
-        # Default initial load: Set 1
-        cached = get_cached_quiz(course_id, video_id, set_index=0)
-        if cached and not contains_devanagari(cached.get("quiz_data", "")):
-            try:
-                quiz_data = json.loads(cached["quiz_data"])
-                disp_total = max(4, set_cnt)
-                return {
-                    "quiz": quiz_data,
-                    "set_index": 1,
-                    "total_sets": disp_total,
+                    "total_sets": max(2, cur_set + 1),
                     "all_covered": False,
                     "message": "",
                 }
@@ -755,65 +581,36 @@ def get_or_generate_quiz(
 
     chunks = _get_lecture_chunks(course_id, video_id)
     if not chunks:
-        # AI Syllabus Fallback for Quiz
-        v_title, c_title = "", ""
-        try:
-            from services.course_db_service import get_connection
-            with get_connection() as conn:
-                r_v = conn.execute("SELECT title FROM course_videos WHERE video_id = ?", (video_id,)).fetchone()
-                if r_v: v_title = r_v["title"]
-                r_c = conn.execute("SELECT title FROM courses WHERE id = ?", (course_id,)).fetchone()
-                if r_c: c_title = r_c["title"]
-        except Exception:
-            pass
-        q_prompt = f"""Generate exactly 5 multiple choice questions for exam practice on:
-Course: {c_title}
-Lecture: {v_title or video_id}
-Output ONLY a JSON array of objects with keys: id (integer 1-5), question (string), options (list of 4 strings), correct_index (integer 0-3), explanation (string).
-No markdown code fences, raw JSON only."""
-        raw_q = _call_gemini(q_prompt, max_output_tokens=2048) or ""
-        import json as _json, re as _re
-        raw_q = _re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_q).strip()
-        try:
-            q_data = _json.loads(raw_q)
-            if isinstance(q_data, list) and len(q_data) > 0:
-                save_quiz(course_id, video_id, _json.dumps(q_data), set_index=0)
-                return {"quiz": q_data, "set_index": 1, "total_sets": 1, "all_covered": True, "message": ""}
-        except Exception:
-            pass
         return {"quiz": [], "set_index": 1, "total_sets": 1, "all_covered": False, "message": "No lecture content found."}
 
     total_dur = chunks[-1][1] - chunks[0][0] if chunks else 0.0
-    # Dynamic set scaling: scale sets naturally to cover all important questions across the entire video
-    if len(chunks) <= 4:
-        max_possible_sets = max(2, len(chunks))
+    if total_dur <= 1200.0:
+        total_sets = 2
+    elif total_dur <= 3600.0:
+        total_sets = 3
+    elif total_dur <= 7200.0:
+        total_sets = 4
     else:
-        # Scale with lecture duration & chunks: up to 16 sets for 2+ hour marathon lectures
-        max_possible_sets = max(4, set_cnt, min(16, max(len(chunks) // 2, int(total_dur // 600) + 1)))
+        total_sets = max(4, min(12, int(total_dur / 3600)))
 
     all_covered = False
     message = ""
     if requested_set is not None:
-        if requested_set >= max_possible_sets:
-            target_set = 0
-            all_covered = True
-            message = "🎉 You have covered all questions & concepts from this lecture! Starting revision from Set 1."
-        else:
-            target_set = requested_set
+        target_set = requested_set % total_sets
+        all_covered = (requested_set >= total_sets)
     elif force_refresh:
-        existing_all = get_cached_quiz(course_id, video_id)
-        last_set = existing_all.get("set_index", 0) if existing_all else 0
+        latest = get_cached_quiz(course_id, video_id)
+        last_set = latest.get("set_index", 0) if latest else 0
         next_set = last_set + 1
-        if next_set >= max_possible_sets:
+        if next_set >= total_sets:
             target_set = 0
             all_covered = True
             message = "🎉 You have covered all questions & concepts from this lecture! Starting revision from Set 1."
         else:
             target_set = next_set
     else:
-        target_set = 0
-
-    total_sets = max(max_possible_sets, target_set + 1, set_cnt)
+        latest = get_cached_quiz(course_id, video_id)
+        target_set = latest.get("set_index", 0) if latest else 0
 
     cached = get_cached_quiz(course_id, video_id, set_index=target_set)
     if cached and (not force_refresh or all_covered or requested_set is not None):
@@ -882,8 +679,7 @@ No markdown code fences, raw JSON only."""
             "2. ZERO OUTSIDE ADDITIONS: Do NOT introduce external textbook questions, facts, or proofs.\n"
             "3. EXPLANATION GROUNDING: In the 'explanation' field, cite the instructor's reasoning from the lecture.\n"
             "4. MANDATORY ENGLISH LANGUAGE: All questions, answer options, and explanations MUST be written 100% in clear, fluent English. Even if the lecture is spoken in Hindi, Hinglish, or another regional language, translate and phrase all concepts, questions, choices, and explanations strictly in standard English. NEVER use Hindi or Devanagari script.\n"
-                        "5. NO LATEX: Use clean Unicode.\n"
-            "6. ZERO METADATA / HEADING QUESTIONS: ABSOLUTELY NEVER ask questions about headings, unit titles, document names, syllabus structure, or section names (e.g. NEVER ask 'What is the title of Unit 1?' or 'What section follows this header?'). Every question MUST test concrete technical knowledge, protocol mechanisms, definitions, formulas, frame formats, packet routing, architectural layers, or real calculations taught in this section.\n\n"
+            "5. NO LATEX: Use clean Unicode.\n\n"
             "Return ONLY a valid JSON array of 5 objects with exact fields:\n"
             "- 'id': (integer 1-5)\n"
             "- 'question': (string)\n"
@@ -932,95 +728,51 @@ def get_or_generate_flashcards(
     If force_refresh is True, advances to the next chronological set.
     When all sets covering the lecture are complete, it loops back to Set 1 and flags all_covered=True.
     """
-    set_cnt = get_flashcard_set_count(course_id, video_id)
-
-    # 1. Fast cache check: if this specific set is already cached in database, return immediately (< 1ms)
-    if requested_set is not None:
-        existing_set = get_flashcards(course_id, video_id, set_index=requested_set)
+    # Fast path: instant return from SQLite cache without loading all chunks
+    if not force_refresh:
+        existing_set = get_flashcards(course_id, video_id, set_index=requested_set if requested_set is not None else None)
         if existing_set and not any(contains_devanagari(c.get("front", "") + c.get("back", "") + c.get("category", "")) for c in existing_set):
-            cur_set = existing_set[0].get("set_index", requested_set) if existing_set else requested_set
-            disp_total = max(4, set_cnt, requested_set + 1)
+            cur_set = existing_set[0].get("set_index", 0) if existing_set else 0
             return {
                 "flashcards": existing_set,
                 "set_index": cur_set + 1,
-                "total_sets": disp_total,
-                "all_covered": False,
-                "message": "",
-            }
-    elif not force_refresh:
-        # Default initial load: Set 1
-        existing_set = get_flashcards(course_id, video_id, set_index=0)
-        if existing_set and not any(contains_devanagari(c.get("front", "") + c.get("back", "") + c.get("category", "")) for c in existing_set):
-            disp_total = max(4, set_cnt)
-            return {
-                "flashcards": existing_set,
-                "set_index": 1,
-                "total_sets": disp_total,
+                "total_sets": max(2, cur_set + 1),
                 "all_covered": False,
                 "message": "",
             }
 
     chunks = _get_lecture_chunks(course_id, video_id)
     if not chunks:
-        # AI Syllabus Fallback for Flashcards
-        v_title, c_title = "", ""
-        try:
-            from services.course_db_service import get_connection
-            with get_connection() as conn:
-                r_v = conn.execute("SELECT title FROM course_videos WHERE video_id = ?", (video_id,)).fetchone()
-                if r_v: v_title = r_v["title"]
-                r_c = conn.execute("SELECT title FROM courses WHERE id = ?", (course_id,)).fetchone()
-                if r_c: c_title = r_c["title"]
-        except Exception:
-            pass
-        fc_prompt = f"""Generate 6 flashcards for exam practice on:
-Course: {c_title}
-Lecture: {v_title or video_id}
-Output ONLY a JSON array of objects with keys: front (string question/concept), back (concise definition/answer), category (string e.g. 'Protocol', 'Formula', 'Definition').
-No markdown code fences, raw JSON only."""
-        raw_fc = _call_gemini(fc_prompt, max_output_tokens=2048) or ""
-        import json as _json, re as _re
-        raw_fc = _re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_fc).strip()
-        try:
-            fc_data = _json.loads(raw_fc)
-            if isinstance(fc_data, list) and len(fc_data) > 0:
-                save_flashcards(course_id, video_id, fc_data, set_index=0)
-                return {"flashcards": fc_data, "set_index": 1, "total_sets": 1, "all_covered": True, "message": ""}
-        except Exception:
-            pass
         return {"flashcards": [], "set_index": 1, "total_sets": 1, "all_covered": False, "message": "No lecture content found."}
 
     total_dur = chunks[-1][1] - chunks[0][0] if chunks else 0.0
-    # Dynamic set scaling: scale sets naturally to cover all important concepts across the entire video
-    if len(chunks) <= 4:
-        max_possible_sets = max(2, len(chunks))
+    if total_dur <= 1200.0:
+        total_sets = 2
+    elif total_dur <= 3600.0:
+        total_sets = 3
+    elif total_dur <= 7200.0:
+        total_sets = 4
     else:
-        # Scale with lecture duration & chunks: up to 16 sets for 2+ hour marathon lectures
-        max_possible_sets = max(4, set_cnt, min(16, max(len(chunks) // 2, int(total_dur // 600) + 1)))
+        total_sets = max(4, min(12, int(total_dur / 3600)))
 
     all_covered = False
     message = ""
     if requested_set is not None:
-        if requested_set >= max_possible_sets:
-            target_set = 0
-            all_covered = True
-            message = "🎉 You have reviewed all key concepts from this lecture! Starting revision loop from Set 1."
-        else:
-            target_set = requested_set
+        target_set = requested_set % total_sets
+        all_covered = (requested_set >= total_sets)
     elif force_refresh:
         existing_all = get_flashcards(course_id, video_id)
         last_set = max((c.get("set_index", 0) for c in existing_all), default=0)
         next_set = last_set + 1
-        if next_set >= max_possible_sets:
+        if next_set >= total_sets:
             target_set = 0
             all_covered = True
             message = "🎉 You have reviewed all key concepts from this lecture! Starting revision loop from Set 1."
         else:
             target_set = next_set
     else:
-        target_set = 0
-
-    total_sets = max(max_possible_sets, target_set + 1, set_cnt)
+        existing_all = get_flashcards(course_id, video_id)
+        target_set = max((c.get("set_index", 0) for c in existing_all), default=0)
 
     existing_set = get_flashcards(course_id, video_id, set_index=target_set)
     if existing_set and (not force_refresh or all_covered or requested_set is not None):
@@ -1081,8 +833,7 @@ No markdown code fences, raw JSON only."""
             "2. ZERO OUTSIDE ADDITIONS: Do NOT pull trivia or facts from external sources.\n"
             "3. ACCURATE CATEGORIES: Categorize each card according to subject matter (e.g. 'Definition', 'Core Concept', 'Formula & Derivation', 'Instructor Tip').\n"
             "4. MANDATORY ENGLISH LANGUAGE: All flashcards (front, back, and category) MUST be written 100% in clear, fluent English. Even if the lecture is spoken in Hindi, Hinglish, or another regional language, translate and express all terms, concepts, questions, and explanations strictly in standard English. NEVER use Hindi or Devanagari script.\n"
-                        "5. NO LATEX: Use clean Unicode.\n"
-            "6. ZERO METADATA / HEADING CARDS: ABSOLUTELY NEVER create flashcards about headings, unit titles, document names, or syllabus structure. Every card MUST test concrete technical definitions, protocol functions, mathematical formulas, network parameters, or exam principles.\n\n"
+            "5. NO LATEX: Use clean Unicode.\n\n"
             "Return ONLY a valid JSON array of 6 to 8 objects with exact fields:\n"
             "- 'front': (string, clear question or term)\n"
             "- 'back': (string, accurate concise answer)\n"
@@ -1144,11 +895,10 @@ def _generate_sectional_quick_notes(chunks: list[tuple[float, float, str]], vide
 
     total_secs = len(sections)
     system_prompt = (
-        "You are an expert university tutor creating complete, high-yield Quick Revision Notes based EXCLUSIVELY on the transcript.\n"
-        "ZERO OUTSIDE KNOWLEDGE: Strictly grounded in what was spoken by the instructor.\n"
-        "ZERO CONTENT SKIPPED: Cover EVERY topic, rule, formula, scheme year, and question taught in this section from start to end without omission.\n"
-        "NO LATEX: Use clean Unicode symbols.\n"
-        "Generate punchy, high-yield bullet points capturing ALL concepts and questions taught in this section chronologically without skipping any topic."
+        "You are an expert tutor creating concise, high-yield Quick Revision Notes based EXCLUSIVELY on the transcript.\n"
+        "ZERO OUTSIDE KNOWLEDGE. Strictly grounded in what was spoken by the instructor.\n"
+        "NO LATEX. Use clean Unicode symbols.\n"
+        "Generate 6 to 10 punchy, high-yield bullet points capturing EVERY key concept, formula, scheme year, and question/MCQ answer taught in this section."
     )
 
     def _process_quick_section(sec_data: tuple[int, list]) -> tuple[int, str]:
@@ -1316,10 +1066,9 @@ def _generate_sectional_notes(chunks: list[tuple[float, float, str]], video_titl
 
     system_prompt = (
         "You are an expert university professor creating publication-grade, exhaustive study notes based EXCLUSIVELY on the provided lecture transcript.\n\n"
-        "ABSOLUTE ZERO-OMISSION & STRICT GROUNDING RULES:\n"
+        "ABSOLUTE ZERO-OUTSIDE-KNOWLEDGE RULES:\n"
         "1. STRICT FACTUAL GROUNDING: Base every note, formula, theorem, question, and explanation ONLY on what was actually spoken, taught, or demonstrated by the instructor in this section.\n"
-        "2. ZERO CONTENT SKIPPED: Do NOT cut, summarize away, or omit any concept, proof, step, whiteboard diagram, example, or problem taught by the instructor. Every single idea taught from the first second to the last second must be thoroughly documented in full depth.\n"
-        "3. ZERO OUTSIDE ADDITIONS: Do NOT introduce external textbook concepts, history, or algorithms not taught.\n"
+        "2. ZERO OUTSIDE ADDITIONS: Do NOT introduce external textbook concepts, history, or algorithms not taught.\n"
         "3. ADAPTIVE LECTURE FORMAT:\n"
         "   A. IF THE INSTRUCTOR IS SOLVING MCQs, PYQs, OR PRACTICE QUESTIONS:\n"
         "      - You MUST list EVERY SINGLE QUESTION discussed in chronological order. Never condense or skip any question!\n"
@@ -1423,38 +1172,41 @@ def get_or_generate_detailed_notes(course_id: int, video_id: str, force_refresh:
         if cached and not is_note_truncated(cached):
             return {"notes": sanitize_text(cached), "cached": True}
 
-    chunks = _get_lecture_chunks(course_id, video_id)
-    if not chunks:
-        # AI Syllabus Fallback: Synthesize master lecture notes directly from university lecture topic
-        v_title = ""
-        c_title = ""
-        try:
-            from services.course_db_service import get_connection
-            with get_connection() as conn:
-                r_v = conn.execute("SELECT title FROM course_videos WHERE video_id = ?", (video_id,)).fetchone()
-                if r_v: v_title = r_v["title"]
-                r_c = conn.execute("SELECT title FROM courses WHERE id = ?", (course_id,)).fetchone()
-                if r_c: c_title = r_c["title"]
-        except Exception:
-            pass
+    try:
 
-        topic_label = v_title or f"Lecture {video_id}"
-        prompt = f"""You are a distinguished university engineering professor.
-Write exhaustive, highly detailed Master Study Notes for the following lecture:
-Course: {c_title or 'Engineering / Computer Science'}
-Lecture: {topic_label}
+        results = collection.get(
 
-Requirements:
-- ZERO-OMISSION COVERAGE: Cover every concept, architectural layer, protocol state transition, definition, and formula relevant to this topic. Nothing must be skipped or cut.
-- Markdown formatted with ## and ### headings, step-by-step numbered derivations, ASCII/Unicode protocol flows, comparison tables, and solved numerical problems.
-- Include an 'AKTU Exam High-Yield PYQs & Problem-Solving Strategies' section.
-- Write an in-depth, textbook-grade master study guide (at least 1500 words).
-- Do NOT use LaTeX math ($). Use plain text or Unicode symbols."""
-        generated = _call_gemini(prompt, max_output_tokens=8192)
-        if generated and len(generated) > 100:
-            save_detailed_notes(course_id, video_id, generated)
-            return {"notes": sanitize_text(generated), "cached": False}
-        return {"notes": "No lecture content found to generate detailed notes.", "cached": False}
+            where={"video_id": video_id},
+
+            include=["documents", "metadatas"],
+
+        )
+
+        documents = results.get("documents", [])
+
+        metadatas = results.get("metadatas", [])
+
+        if not documents:
+
+            return {"notes": "No lecture content found to generate detailed notes.", "cached": False}
+
+        chunks = []
+
+        for doc, meta in zip(documents, metadatas):
+
+            start = meta.get("start", 0.0) if meta else 0.0
+
+            end = meta.get("end", start + 60.0) if meta else start + 60.0
+
+            chunks.append((start, end, doc))
+
+        chunks.sort(key=lambda x: x[0])
+
+    except Exception as e:
+
+        logger.error("Failed to retrieve chunks for detailed notes: %s", e)
+
+        return {"notes": "Failed to load chunks.", "cached": False}
 
     total_duration = chunks[-1][1] - chunks[0][0]
 

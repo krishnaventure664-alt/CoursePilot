@@ -17,31 +17,27 @@ def get_bge_m3_model():
     if _model is None:
         with _model_lock:
             if _model is None:
-                try:
-                    logger.info("Importing FlagEmbedding and loading BGE-M3 model weights...")
-                    from FlagEmbedding import BGEM3FlagModel
+                logger.info("Importing FlagEmbedding and loading BGE-M3 model weights...")
+                from FlagEmbedding import BGEM3FlagModel
 
-                    try:
-                        # Fast local path: bypass remote HuggingFace hub network checks
-                        _model = BGEM3FlagModel(
-                            MODEL_NAME,
-                            use_fp16=True,
-                            return_dense=True,
-                            return_sparse=True,
-                            return_colbert_vecs=False,
-                            local_files_only=True,
-                        )
-                    except Exception:
-                        _model = BGEM3FlagModel(
-                            MODEL_NAME,
-                            use_fp16=True,
-                            return_dense=True,
-                            return_sparse=True,
-                            return_colbert_vecs=False,
-                        )
-                except Exception as e:
-                    logger.warning("FlagEmbedding not available for BGE-M3 (%s). Using cloud lightweight mode.", e)
-                    _model = None
+                try:
+                    # Fast local path: bypass remote HuggingFace hub network checks
+                    _model = BGEM3FlagModel(
+                        MODEL_NAME,
+                        use_fp16=True,
+                        return_dense=True,
+                        return_sparse=True,
+                        return_colbert_vecs=False,
+                        local_files_only=True,
+                    )
+                except Exception:
+                    _model = BGEM3FlagModel(
+                        MODEL_NAME,
+                        use_fp16=True,
+                        return_dense=True,
+                        return_sparse=True,
+                        return_colbert_vecs=False,
+                    )
     return _model
 
 
@@ -53,17 +49,14 @@ def __getattr__(name: str):
 
 def encode_text(text: str):
     model = get_bge_m3_model()
-    if model is not None:
-        result = model.encode([text], batch_size=1)
-        dense = result["dense_vecs"][0]
-        sparse = result["lexical_weights"][0]
-        return {
-            "dense": dense,
-            "sparse": sparse,
-        }
+    result = model.encode([text], batch_size=1)
+
+    dense = result["dense_vecs"][0]
+    sparse = result["lexical_weights"][0]
+
     return {
-        "dense": [0.0] * 1024,
-        "sparse": {},
+        "dense": dense,
+        "sparse": sparse,
     }
 
 
@@ -75,24 +68,20 @@ def encode_texts(texts):
         }
 
     model = get_bge_m3_model()
-    if model is not None:
-        # Batch size 16 keeps peak activation memory well under RTX 3050 VRAM limits
-        result = model.encode(texts, batch_size=16)
-        dense = result["dense_vecs"]
-        sparse = result["lexical_weights"]
-        try:
-            import torch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception:
-            pass
-        return {
-            "dense": dense,
-            "sparse": sparse,
-        }
+    # Batch size 16 keeps peak activation memory well under RTX 3050 VRAM limits
+    result = model.encode(texts, batch_size=16)
 
-    # Cloud lightweight fallback: 1024-dim zero vectors
+    dense = result["dense_vecs"]
+    sparse = result["lexical_weights"]
+
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
     return {
-        "dense": [[0.0] * 1024 for _ in texts],
-        "sparse": [{} for _ in texts],
+        "dense": dense,
+        "sparse": sparse,
     }

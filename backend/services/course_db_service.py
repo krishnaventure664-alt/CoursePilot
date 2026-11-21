@@ -235,36 +235,6 @@ def save_quiz(course_id: int, video_id: str | None, quiz_json: str, set_index: i
         )
 
 
-def get_quiz_set_count(course_id: int, video_id: str | None = None) -> int:
-    with get_connection() as conn:
-        if video_id:
-            row = conn.execute(
-                "SELECT count(DISTINCT set_index) FROM course_quizzes WHERE course_id = ? AND video_id = ?",
-                (course_id, video_id),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT count(DISTINCT set_index) FROM course_quizzes WHERE course_id = ?",
-                (course_id,),
-            ).fetchone()
-        return row[0] if row else 0
-
-
-def get_flashcard_set_count(course_id: int, video_id: str | None = None) -> int:
-    with get_connection() as conn:
-        if video_id:
-            row = conn.execute(
-                "SELECT count(DISTINCT set_index) FROM course_flashcards WHERE course_id = ? AND video_id = ?",
-                (course_id, video_id),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT count(DISTINCT set_index) FROM course_flashcards WHERE course_id = ?",
-                (course_id,),
-            ).fetchone()
-        return row[0] if row else 0
-
-
 def get_flashcards(course_id: int, video_id: str | None = None, set_index: int | None = None):
     with get_connection() as conn:
         if video_id:
@@ -304,6 +274,7 @@ def clear_flashcards(course_id: int, video_id: str | None = None, set_index: int
                 conn.execute("DELETE FROM course_flashcards WHERE course_id = ? AND set_index = ?", (course_id, set_index))
             else:
                 conn.execute("DELETE FROM course_flashcards WHERE course_id = ?", (course_id,))
+        conn.execute("DELETE FROM course_answers WHERE course_id = ?", (course_id,))
 
 
 def save_flashcards(course_id: int, video_id: str | None, cards: list[dict], set_index: int = 0):
@@ -399,10 +370,9 @@ def get_course_videos(course_id: int):
         rows = connection.execute(
             """
             SELECT cv.video_id, cv.title, cv.position, cv.status,
-                   CASE WHEN (vn.content IS NOT NULL AND length(trim(vn.content)) > 50) OR (vdn.content IS NOT NULL AND length(trim(vdn.content)) > 50) THEN 1 ELSE 0 END as has_notes
+                   CASE WHEN vn.content IS NOT NULL AND length(trim(vn.content)) > 50 THEN 1 ELSE 0 END as has_notes
             FROM course_videos cv
             LEFT JOIN video_notes vn ON cv.course_id = vn.course_id AND cv.video_id = vn.video_id
-            LEFT JOIN video_detailed_notes vdn ON cv.course_id = vdn.course_id AND cv.video_id = vdn.video_id
             WHERE cv.course_id = ?
             ORDER BY cv.position
             """,

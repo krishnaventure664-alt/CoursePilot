@@ -6,10 +6,7 @@ import logging
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
-try:
-    import ollama
-except ImportError:
-    ollama = None
+import ollama
 
 http_session = requests.Session()
 adapter = HTTPAdapter(
@@ -42,15 +39,16 @@ OLLAMA_MODEL = "qwen2.5:3b"
 FALLBACK_ANSWER = (
     "I could not find enough information about this in the provided course content."
 )
-RELEVANCE_THRESHOLD = 0.0
+RELEVANCE_THRESHOLD = 0.025
 
 # Verified active production models prioritized by low-latency response speed
 GEMINI_MODELS = [
+    "gemini-2.0-flash",
     "gemini-flash-lite-latest",
-    "gemini-3.1-flash-lite",
-    "gemini-2.5-flash-lite",
     "gemini-2.5-flash",
-    "gemini-flash-latest",
+    "gemini-2.5-flash-lite",
+    "gemini-3-flash-preview",
+    "gemini-3.1-flash-lite-preview",
 ]
 
 
@@ -125,7 +123,7 @@ def _generate_with_gemini(system_prompt: str, user_prompt: str, api_key: str) ->
         }
 
         try:
-            res = http_session.post(url, json=payload, timeout=10)
+            res = http_session.post(url, json=payload, timeout=5)
             if res.status_code == 200:
                 data = res.json()
                 candidates = data.get("candidates", [])
@@ -141,7 +139,7 @@ def _generate_with_gemini(system_prompt: str, user_prompt: str, api_key: str) ->
                     "temperature": 0.1,
                     "maxOutputTokens": 800,
                 }
-                res_retry = http_session.post(url, json=payload, timeout=10)
+                res_retry = http_session.post(url, json=payload, timeout=5)
                 if res_retry.status_code == 200:
                     cand = res_retry.json().get("candidates", [])
                     if cand and "content" in cand[0]:
@@ -305,9 +303,9 @@ def generate_answer(question: str, course_id: int) -> dict:
         if not search_results or search_results[0].get("rerank_score", 0.0) < RELEVANCE_THRESHOLD:
             return {"answer": FALLBACK_ANSWER, "sources": []}
 
-        valid_chunks = [c for c in search_results if c.get("rerank_score", 0.0) >= RELEVANCE_THRESHOLD]
+        valid_chunks = [c for c in search_results if c.get("rerank_score", 0.0) >= 0.08]
         if not valid_chunks:
-            valid_chunks = search_results[:5]
+            valid_chunks = search_results[:4]
 
         # Rank and merge sources prioritizing depth of explanation
         formatted_sources = rank_and_merge_sources_by_depth(valid_chunks)
@@ -333,26 +331,23 @@ def generate_answer(question: str, course_id: int) -> dict:
                 return res_payload
 
         # 6. Local Ollama fallback (with repeat_penalty to eliminate Hinglish repetition loops)
-        if ollama is not None:
-            try:
-                response = ollama.chat(
-                    model=OLLAMA_MODEL,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    options={
-                        "temperature": 0.2,
-                        "repeat_penalty": 1.25,
-                        "num_ctx": 4096,
-                        "num_predict": 700,
-                    },
-                )
-                answer = response["message"]["content"].strip()
-            except Exception as error:
-                logger.exception("Ollama generation failed: %s", error)
-                return {"answer": FALLBACK_ANSWER, "sources": formatted_sources}
-        else:
+        try:
+            response = ollama.chat(
+                model=OLLAMA_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                options={
+                    "temperature": 0.2,
+                    "repeat_penalty": 1.25,
+                    "num_ctx": 4096,
+                    "num_predict": 700,
+                },
+            )
+            answer = response["message"]["content"].strip()
+        except Exception as error:
+            logger.exception("Ollama generation failed: %s", error)
             return {"answer": FALLBACK_ANSWER, "sources": formatted_sources}
 
         if FALLBACK_ANSWER.lower() in answer.lower() and len(answer) < len(FALLBACK_ANSWER) + 30:

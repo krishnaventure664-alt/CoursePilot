@@ -41,87 +41,6 @@ def get_whisper_model():
     return _whisper_model
 
 
-def extract_captions_via_ytdlp(video_id: str) -> dict | None:
-    """Extract YouTube captions directly via yt-dlp internal client spoofing.
-    Bypasses datacenter IP blocking on AWS/Render without requiring proxy or cookies."""
-    import requests
-    import yt_dlp
-
-    video_url = f"https://www.youtube.com/watch?v={video_id}"
-
-    client_configs = [
-        ["android", "mweb"],
-        ["ios"],
-        ["mweb"],
-        ["web"],
-    ]
-
-    for clients in client_configs:
-        try:
-            ydl_opts = {
-                "skip_download": True,
-                "writesubtitles": True,
-                "writeautomaticsub": True,
-                "quiet": True,
-                "no_warnings": True,
-                "extractor_args": {
-                    "youtube": {
-                        "player_client": clients,
-                    }
-                },
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(video_url, download=False)
-                subs = info.get("subtitles") or {}
-                auto_subs = info.get("automatic_captions") or {}
-
-                def _fetch_json3(track_list):
-                    json3_track = next((f for f in track_list if f.get("ext") == "json3"), None)
-                    if not json3_track or not json3_track.get("url"):
-                        return None
-                    try:
-                        resp = requests.get(json3_track["url"], timeout=15)
-                        if resp.status_code == 200:
-                            data = resp.json()
-                            segments = []
-                            for ev in data.get("events", []):
-                                if "segs" in ev:
-                                    txt = "".join(s.get("utf8", "") for s in ev["segs"]).replace("\n", " ").strip()
-                                    if txt:
-                                        start = round(float(ev.get("tStartMs", 0)) / 1000.0, 2)
-                                        dur = round(float(ev.get("dDurationMs", 0)) / 1000.0, 2)
-                                        segments.append({
-                                            "start": start,
-                                            "duration": dur,
-                                            "end": round(start + dur, 2),
-                                            "text": txt,
-                                        })
-                            if segments:
-                                return segments
-                    except Exception:
-                        pass
-                    return None
-
-                # Try preferred educational languages: hi, en, en-IN, hi-Latn
-                for lang_code in ["hi", "en", "en-IN", "hi-Latn", "ur", "bn", "mr"]:
-                    track_list = subs.get(lang_code) or auto_subs.get(lang_code) or []
-                    segs = _fetch_json3(track_list)
-                    if segs:
-                        return {"source": f"youtube_ytdlp_{lang_code}", "segments": segs}
-
-                # If specific codes not found, try the very first track in auto_subs or subs
-                for track_dict in [subs, auto_subs]:
-                    if track_dict:
-                        first_lang = next(iter(track_dict))
-                        segs = _fetch_json3(track_dict[first_lang])
-                        if segs:
-                            return {"source": f"youtube_ytdlp_{first_lang}", "segments": segs}
-        except Exception:
-            continue
-
-    return None
-
-
 def get_video_transcript(video_id: str, video_title: str = "", course_title: str = "") -> dict:
     """
     Fetch authentic video transcript grounded strictly in what was taught:
@@ -163,15 +82,6 @@ def get_video_transcript(video_id: str, video_title: str = "", course_title: str
 
     except (NoTranscriptFound, TranscriptsDisabled, YouTubeRequestFailed, Exception) as error:
         logger.info(f"YouTube captions unavailable for {video_id}: {error}")
-
-    # 1.5. Extract captions via yt-dlp (Bypasses YouTube datacenter IP blocking on cloud servers like Render)
-    try:
-        ytdlp_trans = extract_captions_via_ytdlp(video_id)
-        if ytdlp_trans and ytdlp_trans.get("segments"):
-            logger.info(f"Retrieved {len(ytdlp_trans['segments'])} segments via yt-dlp captions for {video_id}")
-            return ytdlp_trans
-    except Exception as ytdlp_err:
-        logger.info(f"yt-dlp captions unavailable for {video_id}: {ytdlp_err}")
 
     # 2. Authentic Speech Transcription via Gemini Audio File API
     audio_path = None
