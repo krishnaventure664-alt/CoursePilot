@@ -42,7 +42,7 @@ OLLAMA_MODEL = "qwen2.5:3b"
 FALLBACK_ANSWER = (
     "I could not find enough information about this in the provided course content."
 )
-RELEVANCE_THRESHOLD = 0.01
+RELEVANCE_THRESHOLD = 0.0
 
 # Verified active production models prioritized by low-latency response speed
 GEMINI_MODELS = [
@@ -305,9 +305,9 @@ def generate_answer(question: str, course_id: int) -> dict:
         if not search_results or search_results[0].get("rerank_score", 0.0) < RELEVANCE_THRESHOLD:
             return {"answer": FALLBACK_ANSWER, "sources": []}
 
-        valid_chunks = [c for c in search_results if c.get("rerank_score", 0.0) >= 0.01]
+        valid_chunks = [c for c in search_results if c.get("rerank_score", 0.0) >= RELEVANCE_THRESHOLD]
         if not valid_chunks:
-            valid_chunks = search_results[:4]
+            valid_chunks = search_results[:5]
 
         # Rank and merge sources prioritizing depth of explanation
         formatted_sources = rank_and_merge_sources_by_depth(valid_chunks)

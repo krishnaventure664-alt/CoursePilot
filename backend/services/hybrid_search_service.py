@@ -158,6 +158,9 @@ def hybrid_search(
     dense_query = encoded_query["dense"]
     sparse_query = encoded_query["sparse"]
 
+    if dense_query is not None and hasattr(dense_query, "tolist"):
+        dense_query = dense_query.tolist()
+
     is_zero_dense = not dense_query or all(v == 0.0 for v in dense_query)
     is_empty_sparse = not sparse_query
 
