@@ -15,6 +15,37 @@ FINAL_TOP_K = 6
 _chunk_details_cache: dict[str, dict] = {}
 _chunk_details_lock = threading.Lock()
 
+_cached_seed_chunks: list[dict] | None = None
+_seed_chunks_lock = threading.Lock()
+
+
+def _get_seed_chunks() -> list[dict]:
+    global _cached_seed_chunks
+    if _cached_seed_chunks is not None:
+        return _cached_seed_chunks
+
+    with _seed_chunks_lock:
+        if _cached_seed_chunks is not None:
+            return _cached_seed_chunks
+
+        import json
+        from pathlib import Path
+        backend_dir = Path(__file__).resolve().parents[1]
+        all_seed = backend_dir / "all_courses_chunks_seed.json"
+        c18_seed = backend_dir / "course18_chunks_seed.json"
+
+        chunks = []
+        target_file = all_seed if all_seed.exists() else (c18_seed if c18_seed.exists() else None)
+        if target_file:
+            try:
+                with open(target_file, "r", encoding="utf-8") as f:
+                    chunks = json.load(f)
+            except Exception:
+                chunks = []
+
+        _cached_seed_chunks = chunks
+        return _cached_seed_chunks
+
 
 def get_chunk_details(chunk_ids):
     """
@@ -35,28 +66,53 @@ def get_chunk_details(chunk_ids):
                 missing_ids.append(cid)
 
     if missing_ids:
-        from services.bge_m3_vector_store_service import collection
-        try:
-            results = collection.get(
-                ids=missing_ids,
-                include=["documents", "metadatas"]
-            )
-            for i, chunk_id in enumerate(results.get("ids", [])):
+        # First check in-memory seed chunks
+        seed_chunks = _get_seed_chunks()
+        seed_map = {c["id"]: c for c in seed_chunks}
+        still_missing = []
+        for cid in missing_ids:
+            if cid in seed_map:
+                sc = seed_map[cid]
+                meta = sc.get("metadata", {})
                 c_item = {
-                    "chunk_id": chunk_id,
-                    "text": results["documents"][i],
-                    "video_id": results["metadatas"][i]["video_id"],
-                    "course_id": results["metadatas"][i]["course_id"],
-                    "start": results["metadatas"][i]["start"],
-                    "end": results["metadatas"][i]["end"],
+                    "chunk_id": sc["id"],
+                    "text": sc["document"],
+                    "video_id": meta.get("video_id", ""),
+                    "course_id": meta.get("course_id", ""),
+                    "start": meta.get("start", 0),
+                    "end": meta.get("end", 0),
                 }
                 cached_results.append(c_item)
                 with _chunk_details_lock:
                     if len(_chunk_details_cache) > 2000:
                         _chunk_details_cache.pop(next(iter(_chunk_details_cache)))
-                    _chunk_details_cache[chunk_id] = c_item
-        except Exception:
-            pass
+                    _chunk_details_cache[cid] = c_item
+            else:
+                still_missing.append(cid)
+
+        if still_missing:
+            from services.bge_m3_vector_store_service import collection
+            try:
+                results = collection.get(
+                    ids=still_missing,
+                    include=["documents", "metadatas"]
+                )
+                for i, chunk_id in enumerate(results.get("ids", [])):
+                    c_item = {
+                        "chunk_id": chunk_id,
+                        "text": results["documents"][i],
+                        "video_id": results["metadatas"][i]["video_id"],
+                        "course_id": results["metadatas"][i]["course_id"],
+                        "start": results["metadatas"][i]["start"],
+                        "end": results["metadatas"][i]["end"],
+                    }
+                    cached_results.append(c_item)
+                    with _chunk_details_lock:
+                        if len(_chunk_details_cache) > 2000:
+                            _chunk_details_cache.pop(next(iter(_chunk_details_cache)))
+                        _chunk_details_cache[chunk_id] = c_item
+            except Exception:
+                pass
 
     chunk_map = {c["chunk_id"]: c for c in cached_results}
     return [chunk_map[cid] for cid in chunk_ids if cid in chunk_map]
@@ -149,60 +205,116 @@ def hybrid_search(
         top_k=RRF_TOP_K
     )
 
-    if not rrf_results:
-        return []
-
-    # --------------------------------------------------
-    # 5. Fetch actual chunk text + metadata
-    # --------------------------------------------------
-
-    chunk_ids = [
-        result["chunk_id"]
-        for result in rrf_results
-    ]
-
-    chunk_details = get_chunk_details(chunk_ids)
-
-    chunk_map = {
-        chunk["chunk_id"]: chunk
-        for chunk in chunk_details
-    }
-
     reranker_candidates = []
 
-    for result in rrf_results:
+    if rrf_results:
+        chunk_ids = [
+            result["chunk_id"]
+            for result in rrf_results
+        ]
 
-        chunk_id = result["chunk_id"]
+        chunk_details = get_chunk_details(chunk_ids)
 
-        if chunk_id not in chunk_map:
-            continue
+        chunk_map = {
+            chunk["chunk_id"]: chunk
+            for chunk in chunk_details
+        }
 
-        chunk = chunk_map[chunk_id]
+        for result in rrf_results:
+            chunk_id = result["chunk_id"]
 
-        reranker_candidates.append({
-            "chunk_id": chunk_id,
-            "text": chunk["text"],
-            "video_id": chunk["video_id"],
-            "course_id": chunk["course_id"],
-            "start": chunk["start"],
-            "end": chunk["end"],
-            "rrf_score": result["rrf_score"],
-            "dense_rank": result["dense_rank"],
-            "sparse_rank": result["sparse_rank"],
-        })
+            if chunk_id not in chunk_map:
+                continue
+
+            chunk = chunk_map[chunk_id]
+
+            reranker_candidates.append({
+                "chunk_id": chunk_id,
+                "text": chunk["text"],
+                "video_id": chunk["video_id"],
+                "course_id": chunk["course_id"],
+                "start": chunk["start"],
+                "end": chunk["end"],
+                "rrf_score": result["rrf_score"],
+                "dense_rank": result["dense_rank"],
+                "sparse_rank": result["sparse_rank"],
+            })
 
     if not reranker_candidates:
-        # Cloud fallback for pre-indexed courses when local PyTorch model weights are omitted
+        # Cloud multi-course fallback when local PyTorch model weights are omitted
         try:
-            import json, re, math
+            import re, math
             from collections import Counter
-            from pathlib import Path
 
-            seed_file = Path(__file__).resolve().parents[1] / "course18_chunks_seed.json"
-            if seed_file.exists():
-                with open(seed_file, "r", encoding="utf-8") as sf:
-                    seed_chunks = json.load(sf)
+            candidate_items = []
+            seed_chunks = _get_seed_chunks()
 
+            # 1. Check all seeded course chunks
+            for c in seed_chunks:
+                meta = c.get("metadata", {})
+                c_course_id = meta.get("course_id")
+                if str(c_course_id) == str(effective_course_id):
+                    candidate_items.append({
+                        "id": c["id"],
+                        "document": c["document"],
+                        "metadata": meta,
+                    })
+
+            # 2. Check live ChromaDB collection (covers newly indexed courses)
+            if not candidate_items:
+                from services.bge_m3_vector_store_service import collection
+                try:
+                    c_data = collection.get(
+                        where={"course_id": effective_course_id},
+                        include=["documents", "metadatas"],
+                    )
+                    docs = c_data.get("documents", [])
+                    metas = c_data.get("metadatas", [])
+                    ids = c_data.get("ids", [])
+                    for i in range(len(docs)):
+                        candidate_items.append({
+                            "id": ids[i],
+                            "document": docs[i],
+                            "metadata": metas[i] if i < len(metas) else {},
+                        })
+                except Exception:
+                    pass
+
+            # 3. Check SQLite detailed notes and lecture notes as dynamic fallback
+            if not candidate_items:
+                from services.course_db_service import get_connection
+                try:
+                    with get_connection() as conn:
+                        rows = conn.execute(
+                            "SELECT video_id, content FROM video_detailed_notes WHERE course_id = ?",
+                            (effective_course_id,)
+                        ).fetchall()
+                        if not rows:
+                            rows = conn.execute(
+                                "SELECT video_id, content FROM video_notes WHERE course_id = ?",
+                                (effective_course_id,)
+                            ).fetchall()
+                        for v_id, content in rows:
+                            if not content:
+                                continue
+                            secs = re.split(r"(?=\n###?\s+)", content)
+                            for s_idx, sec in enumerate(secs):
+                                sec_str = sec.strip()
+                                if len(sec_str) >= 50:
+                                    candidate_items.append({
+                                        "id": f"course_{effective_course_id}_{v_id}_sec_{s_idx}",
+                                        "document": sec_str,
+                                        "metadata": {
+                                            "course_id": effective_course_id,
+                                            "video_id": v_id,
+                                            "start": 0,
+                                            "end": 60,
+                                        }
+                                    })
+                except Exception:
+                    pass
+
+            if candidate_items:
                 q_words = set(re.findall(r"\w+", query.lower()))
 
                 def _score_chunk(doc_text):
@@ -212,13 +324,10 @@ def hybrid_search(
                     return sum((counts[w] / tot) * (1.0 + math.log(1.0 + counts[w])) for w in q_words if w in counts)
 
                 scored = []
-                for c in seed_chunks:
-                    meta = c.get("metadata", {})
-                    c_course_id = meta.get("course_id")
-                    if str(c_course_id) == str(effective_course_id) or not c_course_id:
-                        s = _score_chunk(c["document"])
-                        if s > 0:
-                            scored.append((c, s))
+                for c in candidate_items:
+                    s = _score_chunk(c["document"])
+                    if s > 0:
+                        scored.append((c, s))
 
                 scored.sort(key=lambda x: x[1], reverse=True)
 

@@ -48,10 +48,11 @@ logger = logging.getLogger(__name__)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
 GEMINI_MODELS = [
+    "gemini-flash-lite-latest",
+    "gemini-3.1-flash-lite",
+    "gemini-3.1-flash-lite-preview",
     "gemini-2.5-flash",
     "gemini-3-flash-preview",
-    "gemini-flash-lite-latest",
-    "gemini-3.1-flash-lite-preview",
 ]
 
 # Persistent session with connection pooling for low-latency concurrent API calls

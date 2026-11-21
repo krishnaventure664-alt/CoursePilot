@@ -21,8 +21,18 @@ GEMINI_MODELS = [
 ]
 
 
+def get_ffmpeg_binary() -> str:
+    """Return path to ffmpeg binary, favoring bundled static binary from imageio-ffmpeg."""
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return "ffmpeg"
+
+
 def get_audio_duration(audio_path: str) -> float:
-    """Get the duration of an audio file in seconds using ffprobe."""
+    """Get the duration of an audio file in seconds using ffprobe or ffmpeg."""
+    # 1. Try ffprobe
     try:
         cmd = [
             "ffprobe",
@@ -33,9 +43,30 @@ def get_audio_duration(audio_path: str) -> float:
         ]
         res = subprocess.run(cmd, capture_output=True, text=True, check=True)
         data = json.loads(res.stdout)
-        return float(data.get("format", {}).get("duration", 0.0))
+        dur = float(data.get("format", {}).get("duration", 0.0))
+        if dur > 0:
+            return dur
+    except Exception:
+        pass
+
+    # 2. Try ffmpeg output duration regex
+    try:
+        ffmpeg_bin = get_ffmpeg_binary()
+        cmd = [ffmpeg_bin, "-i", audio_path]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        # Output looks like: Duration: 01:25:39.45, start: 0.000000, bitrate: 64 kb/s
+        match = re.search(r"Duration:\s*(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)", res.stderr)
+        if match:
+            h, m, s = match.groups()
+            return int(h) * 3600 + int(m) * 60 + float(s)
     except Exception as e:
-        logger.warning(f"ffprobe failed for {audio_path}: {e}")
+        logger.warning(f"ffmpeg duration check failed for {audio_path}: {e}")
+
+    # 3. Fallback: estimate from file size (assuming ~48kbps opus/webm)
+    try:
+        f_size = os.path.getsize(audio_path)
+        return max(60.0, f_size / (6000.0))
+    except Exception:
         return 0.0
 
 
@@ -50,8 +81,9 @@ def compress_and_slice_audio(
     Fast seeking with -ss before -i executes in under 1 second.
     """
     try:
+        ffmpeg_bin = get_ffmpeg_binary()
         cmd = [
-            "ffmpeg",
+            ffmpeg_bin,
             "-y",
             "-ss", str(start_sec),
             "-i", audio_path,

@@ -17,23 +17,28 @@ collection = client.get_or_create_collection(
 
 # Auto-seed ChromaDB on fresh cloud deployments (e.g. Render)
 try:
-    if collection.count() == 0:
-        seed_file = Path(__file__).resolve().parents[1] / "course18_chunks_seed.json"
+    if collection.count() < 1000:
+        seed_file = Path(__file__).resolve().parents[1] / "all_courses_chunks_seed.json"
+        if not seed_file.exists():
+            seed_file = Path(__file__).resolve().parents[1] / "course18_chunks_seed.json"
         if seed_file.exists():
             with open(seed_file, "r", encoding="utf-8") as f:
                 seed_data = json.load(f)
             if seed_data:
-                c_ids = [item["id"] for item in seed_data]
-                c_docs = [item["document"] for item in seed_data]
-                c_metas = [item["metadata"] for item in seed_data]
-                c_embs = [item["embedding"] for item in seed_data]
-                collection.upsert(
-                    ids=c_ids,
-                    documents=c_docs,
-                    metadatas=c_metas,
-                    embeddings=c_embs,
-                )
-                logger.info(f"Auto-seeded {len(c_ids)} chunks into ChromaDB from {seed_file.name}")
+                batch_size = 500
+                for b_start in range(0, len(seed_data), batch_size):
+                    batch = seed_data[b_start:b_start + batch_size]
+                    c_ids = [item["id"] for item in batch]
+                    c_docs = [item["document"] for item in batch]
+                    c_metas = [item["metadata"] for item in batch]
+                    c_embs = [item.get("embedding") or ([0.0] * 1024) for item in batch]
+                    collection.upsert(
+                        ids=c_ids,
+                        documents=c_docs,
+                        metadatas=c_metas,
+                        embeddings=c_embs,
+                    )
+                logger.info(f"Auto-seeded {len(seed_data)} chunks into ChromaDB from {seed_file.name}")
 except Exception as e:
     logger.warning("Could not auto-seed ChromaDB: %s", e)
 
