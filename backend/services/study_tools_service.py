@@ -512,6 +512,25 @@ def get_or_generate_notes(course_id: int, video_id: str, force_refresh: bool = F
     try:
         chunks = _get_lecture_chunks(course_id, video_id)
         if not chunks:
+            # AI Syllabus Fallback
+            v_title, c_title = "", ""
+            try:
+                from services.course_db_service import get_connection
+                with get_connection() as conn:
+                    r_v = conn.execute("SELECT title FROM course_videos WHERE video_id = ?", (video_id,)).fetchone()
+                    if r_v: v_title = r_v["title"]
+                    r_c = conn.execute("SELECT title FROM courses WHERE id = ?", (course_id,)).fetchone()
+                    if r_c: c_title = r_c["title"]
+            except Exception:
+                pass
+            prompt = f"""Generate concise, high-yield bulleted revision notes for:
+Course: {c_title or 'Engineering'}
+Lecture: {v_title or video_id}
+Format: Markdown with clean bullet points, core definitions, and exam takeaways. Do NOT use LaTeX math ($)."""
+            gen = _call_gemini(prompt, max_output_tokens=4096)
+            if gen and len(gen) > 50:
+                save_notes(course_id, video_id, gen)
+                return {"notes": sanitize_text(gen), "cached": False}
             return {"notes": "No lecture content found to generate notes.", "cached": False}
 
         total_dur = chunks[-1][1] - chunks[0][0] if chunks else 0.0
@@ -618,6 +637,32 @@ def get_or_generate_quiz(
 
     chunks = _get_lecture_chunks(course_id, video_id)
     if not chunks:
+        # AI Syllabus Fallback for Quiz
+        v_title, c_title = "", ""
+        try:
+            from services.course_db_service import get_connection
+            with get_connection() as conn:
+                r_v = conn.execute("SELECT title FROM course_videos WHERE video_id = ?", (video_id,)).fetchone()
+                if r_v: v_title = r_v["title"]
+                r_c = conn.execute("SELECT title FROM courses WHERE id = ?", (course_id,)).fetchone()
+                if r_c: c_title = r_c["title"]
+        except Exception:
+            pass
+        q_prompt = f"""Generate exactly 5 multiple choice questions for exam practice on:
+Course: {c_title}
+Lecture: {v_title or video_id}
+Output ONLY a JSON array of objects with keys: id (integer 1-5), question (string), options (list of 4 strings), correct_index (integer 0-3), explanation (string).
+No markdown code fences, raw JSON only."""
+        raw_q = _call_gemini(q_prompt, max_output_tokens=2048) or ""
+        import json as _json, re as _re
+        raw_q = _re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_q).strip()
+        try:
+            q_data = _json.loads(raw_q)
+            if isinstance(q_data, list) and len(q_data) > 0:
+                save_quiz(course_id, video_id, _json.dumps(q_data), set_index=0)
+                return {"quiz": q_data, "set_index": 1, "total_sets": 1, "all_covered": True, "message": ""}
+        except Exception:
+            pass
         return {"quiz": [], "set_index": 1, "total_sets": 1, "all_covered": False, "message": "No lecture content found."}
 
     total_dur = chunks[-1][1] - chunks[0][0] if chunks else 0.0
@@ -780,6 +825,32 @@ def get_or_generate_flashcards(
 
     chunks = _get_lecture_chunks(course_id, video_id)
     if not chunks:
+        # AI Syllabus Fallback for Flashcards
+        v_title, c_title = "", ""
+        try:
+            from services.course_db_service import get_connection
+            with get_connection() as conn:
+                r_v = conn.execute("SELECT title FROM course_videos WHERE video_id = ?", (video_id,)).fetchone()
+                if r_v: v_title = r_v["title"]
+                r_c = conn.execute("SELECT title FROM courses WHERE id = ?", (course_id,)).fetchone()
+                if r_c: c_title = r_c["title"]
+        except Exception:
+            pass
+        fc_prompt = f"""Generate 6 flashcards for exam practice on:
+Course: {c_title}
+Lecture: {v_title or video_id}
+Output ONLY a JSON array of objects with keys: front (string question/concept), back (concise definition/answer), category (string e.g. 'Protocol', 'Formula', 'Definition').
+No markdown code fences, raw JSON only."""
+        raw_fc = _call_gemini(fc_prompt, max_output_tokens=2048) or ""
+        import json as _json, re as _re
+        raw_fc = _re.sub(r"^```(?:json)?\s*|\s*```$", "", raw_fc).strip()
+        try:
+            fc_data = _json.loads(raw_fc)
+            if isinstance(fc_data, list) and len(fc_data) > 0:
+                save_flashcards(course_id, video_id, fc_data, set_index=0)
+                return {"flashcards": fc_data, "set_index": 1, "total_sets": 1, "all_covered": True, "message": ""}
+        except Exception:
+            pass
         return {"flashcards": [], "set_index": 1, "total_sets": 1, "all_covered": False, "message": "No lecture content found."}
 
     total_dur = chunks[-1][1] - chunks[0][0] if chunks else 0.0
@@ -1209,41 +1280,37 @@ def get_or_generate_detailed_notes(course_id: int, video_id: str, force_refresh:
         if cached and not is_note_truncated(cached):
             return {"notes": sanitize_text(cached), "cached": True}
 
-    try:
+    chunks = _get_lecture_chunks(course_id, video_id)
+    if not chunks:
+        # AI Syllabus Fallback: Synthesize master lecture notes directly from university lecture topic
+        v_title = ""
+        c_title = ""
+        try:
+            from services.course_db_service import get_connection
+            with get_connection() as conn:
+                r_v = conn.execute("SELECT title FROM course_videos WHERE video_id = ?", (video_id,)).fetchone()
+                if r_v: v_title = r_v["title"]
+                r_c = conn.execute("SELECT title FROM courses WHERE id = ?", (course_id,)).fetchone()
+                if r_c: c_title = r_c["title"]
+        except Exception:
+            pass
 
-        results = collection.get(
+        topic_label = v_title or f"Lecture {video_id}"
+        prompt = f"""You are a distinguished university engineering professor.
+Write exhaustive, highly detailed Master Study Notes for the following lecture:
+Course: {c_title or 'Engineering / Computer Science'}
+Lecture: {topic_label}
 
-            where={"video_id": video_id},
-
-            include=["documents", "metadatas"],
-
-        )
-
-        documents = results.get("documents", [])
-
-        metadatas = results.get("metadatas", [])
-
-        if not documents:
-
-            return {"notes": "No lecture content found to generate detailed notes.", "cached": False}
-
-        chunks = []
-
-        for doc, meta in zip(documents, metadatas):
-
-            start = meta.get("start", 0.0) if meta else 0.0
-
-            end = meta.get("end", start + 60.0) if meta else start + 60.0
-
-            chunks.append((start, end, doc))
-
-        chunks.sort(key=lambda x: x[0])
-
-    except Exception as e:
-
-        logger.error("Failed to retrieve chunks for detailed notes: %s", e)
-
-        return {"notes": "Failed to load chunks.", "cached": False}
+Requirements:
+- Markdown formatted with ## and ### headings, definitions, architectural explanations, protocol flows, and formula derivations.
+- Include an 'AKTU Exam Tips & High-Yield Questions' section.
+- Write at least 800 words of thorough, exam-ready content.
+- Do NOT use LaTeX math ($). Use plain text or Unicode symbols."""
+        generated = _call_gemini(prompt, max_output_tokens=8192)
+        if generated and len(generated) > 100:
+            save_detailed_notes(course_id, video_id, generated)
+            return {"notes": sanitize_text(generated), "cached": False}
+        return {"notes": "No lecture content found to generate detailed notes.", "cached": False}
 
     total_duration = chunks[-1][1] - chunks[0][0]
 
