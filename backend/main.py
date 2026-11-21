@@ -221,22 +221,23 @@ def index_playlist_in_background(course_id: int, items: list):
     note_executor = ThreadPoolExecutor(max_workers=2)
     note_futures = []
 
-    def _safe_generate_study_tools(c_id: int, v_id: str, is_active_lecture: bool = False):
+    def _safe_generate_study_tools(c_id: int, v_id: str):
         try:
             get_or_generate_notes(c_id, v_id)
         except Exception as note_err:
             print(f"Background note generation error for {v_id}: {note_err}")
-        if is_active_lecture:
-            # Eagerly generate Quiz & Flashcards for the active/first lecture in the background
-            # so the user clicking Quiz or Flashcards sees them instantly in 0ms!
-            try:
-                get_or_generate_quiz(c_id, v_id)
-            except Exception as q_err:
-                print(f"Background quiz generation error for {v_id}: {q_err}")
-            try:
-                get_or_generate_flashcards(c_id, v_id)
-            except Exception as f_err:
-                print(f"Background flashcard generation error for {v_id}: {f_err}")
+        try:
+            get_or_generate_detailed_notes(c_id, v_id)
+        except Exception as det_err:
+            print(f"Background detailed note generation error for {v_id}: {det_err}")
+        try:
+            get_or_generate_quiz(c_id, v_id)
+        except Exception as q_err:
+            print(f"Background quiz generation error for {v_id}: {q_err}")
+        try:
+            get_or_generate_flashcards(c_id, v_id)
+        except Exception as f_err:
+            print(f"Background flashcard generation error for {v_id}: {f_err}")
 
     for position, item in enumerate(items, start=1):
         snippet = item["snippet"]
@@ -248,7 +249,7 @@ def index_playlist_in_background(course_id: int, items: list):
             save_course_video(course_id, video_id, title, position, "completed")
             update_course_progress(course_id, completed, total, "indexing")
             is_first = (position == 1 or completed == 1)
-            note_futures.append(note_executor.submit(_safe_generate_study_tools, course_id, video_id, is_first))
+            note_futures.append(note_executor.submit(_safe_generate_study_tools, course_id, video_id))
             continue
 
         save_course_video(course_id, video_id, title, position, "processing")
@@ -263,7 +264,7 @@ def index_playlist_in_background(course_id: int, items: list):
             completed += 1
             # Overlap study tools generation over the network while next video embeds on GPU
             is_first = (position == 1 or completed == 1)
-            note_futures.append(note_executor.submit(_safe_generate_study_tools, course_id, video_id, is_first))
+            note_futures.append(note_executor.submit(_safe_generate_study_tools, course_id, video_id))
 
         save_course_video(course_id, video_id, title, position, video_status)
         update_course_progress(course_id, completed, total, "indexing")

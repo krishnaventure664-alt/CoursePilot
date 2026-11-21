@@ -48,59 +48,76 @@ def extract_captions_via_ytdlp(video_id: str) -> dict | None:
     import yt_dlp
 
     video_url = f"https://www.youtube.com/watch?v={video_id}"
-    ydl_opts = {
-        "skip_download": True,
-        "writesubtitles": True,
-        "writeautomaticsub": True,
-        "quiet": True,
-        "no_warnings": True,
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(video_url, download=False)
-        subs = info.get("subtitles") or {}
-        auto_subs = info.get("automatic_captions") or {}
 
-        def _fetch_json3(track_list):
-            json3_track = next((f for f in track_list if f.get("ext") == "json3"), None)
-            if not json3_track or not json3_track.get("url"):
-                return None
-            try:
-                resp = requests.get(json3_track["url"], timeout=15)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    segments = []
-                    for ev in data.get("events", []):
-                        if "segs" in ev:
-                            txt = "".join(s.get("utf8", "") for s in ev["segs"]).replace("\n", " ").strip()
-                            if txt:
-                                start = round(float(ev.get("tStartMs", 0)) / 1000.0, 2)
-                                dur = round(float(ev.get("dDurationMs", 0)) / 1000.0, 2)
-                                segments.append({
-                                    "start": start,
-                                    "duration": dur,
-                                    "end": round(start + dur, 2),
-                                    "text": txt,
-                                })
-                    if segments:
-                        return segments
-            except Exception:
-                pass
-            return None
+    client_configs = [
+        ["android", "mweb"],
+        ["ios"],
+        ["mweb"],
+        ["web"],
+    ]
 
-        # Try preferred educational languages: hi, en, en-IN, hi-Latn
-        for lang_code in ["hi", "en", "en-IN", "hi-Latn", "ur", "bn", "mr"]:
-            track_list = subs.get(lang_code) or auto_subs.get(lang_code) or []
-            segs = _fetch_json3(track_list)
-            if segs:
-                return {"source": f"youtube_ytdlp_{lang_code}", "segments": segs}
+    for clients in client_configs:
+        try:
+            ydl_opts = {
+                "skip_download": True,
+                "writesubtitles": True,
+                "writeautomaticsub": True,
+                "quiet": True,
+                "no_warnings": True,
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": clients,
+                    }
+                },
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(video_url, download=False)
+                subs = info.get("subtitles") or {}
+                auto_subs = info.get("automatic_captions") or {}
 
-        # If specific codes not found, try the very first track in auto_subs or subs (1 request only)
-        for track_dict in [subs, auto_subs]:
-            if track_dict:
-                first_lang = next(iter(track_dict))
-                segs = _fetch_json3(track_dict[first_lang])
-                if segs:
-                    return {"source": f"youtube_ytdlp_{first_lang}", "segments": segs}
+                def _fetch_json3(track_list):
+                    json3_track = next((f for f in track_list if f.get("ext") == "json3"), None)
+                    if not json3_track or not json3_track.get("url"):
+                        return None
+                    try:
+                        resp = requests.get(json3_track["url"], timeout=15)
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            segments = []
+                            for ev in data.get("events", []):
+                                if "segs" in ev:
+                                    txt = "".join(s.get("utf8", "") for s in ev["segs"]).replace("\n", " ").strip()
+                                    if txt:
+                                        start = round(float(ev.get("tStartMs", 0)) / 1000.0, 2)
+                                        dur = round(float(ev.get("dDurationMs", 0)) / 1000.0, 2)
+                                        segments.append({
+                                            "start": start,
+                                            "duration": dur,
+                                            "end": round(start + dur, 2),
+                                            "text": txt,
+                                        })
+                            if segments:
+                                return segments
+                    except Exception:
+                        pass
+                    return None
+
+                # Try preferred educational languages: hi, en, en-IN, hi-Latn
+                for lang_code in ["hi", "en", "en-IN", "hi-Latn", "ur", "bn", "mr"]:
+                    track_list = subs.get(lang_code) or auto_subs.get(lang_code) or []
+                    segs = _fetch_json3(track_list)
+                    if segs:
+                        return {"source": f"youtube_ytdlp_{lang_code}", "segments": segs}
+
+                # If specific codes not found, try the very first track in auto_subs or subs
+                for track_dict in [subs, auto_subs]:
+                    if track_dict:
+                        first_lang = next(iter(track_dict))
+                        segs = _fetch_json3(track_dict[first_lang])
+                        if segs:
+                            return {"source": f"youtube_ytdlp_{first_lang}", "segments": segs}
+        except Exception:
+            continue
 
     return None
 

@@ -369,9 +369,10 @@ def get_course_videos(course_id: int):
         rows = connection.execute(
             """
             SELECT cv.video_id, cv.title, cv.position, cv.status,
-                   CASE WHEN vn.content IS NOT NULL AND length(trim(vn.content)) > 50 THEN 1 ELSE 0 END as has_notes
+                   CASE WHEN (vn.content IS NOT NULL AND length(trim(vn.content)) > 50) OR (vdn.content IS NOT NULL AND length(trim(vdn.content)) > 50) THEN 1 ELSE 0 END as has_notes
             FROM course_videos cv
             LEFT JOIN video_notes vn ON cv.course_id = vn.course_id AND cv.video_id = vn.video_id
+            LEFT JOIN video_detailed_notes vdn ON cv.course_id = vdn.course_id AND cv.video_id = vdn.video_id
             WHERE cv.course_id = ?
             ORDER BY cv.position
             """,

@@ -332,6 +332,42 @@ def _get_lecture_chunks(course_id: int, video_id: str | None = None) -> list[tup
                 end = meta.get("end", start + 60.0) if meta else start + 60.0
                 chunks.append((start, end, doc))
             chunks.sort(key=lambda x: x[0])
+
+        if not chunks:
+            try:
+                from services.hybrid_search_service import _get_seed_chunks
+                seed_chunks = _get_seed_chunks()
+                for c in seed_chunks:
+                    meta = c.get("metadata", {})
+                    c_vid = meta.get("video_id")
+                    c_cid = meta.get("course_id")
+                    if video_id and str(c_vid) == str(video_id):
+                        chunks.append((float(meta.get("start", 0.0)), float(meta.get("end", 60.0)), c["document"]))
+                    elif not video_id and str(c_cid) == str(effective_course_id):
+                        chunks.append((float(meta.get("start", 0.0)), float(meta.get("end", 60.0)), c["document"]))
+                if chunks:
+                    chunks.sort(key=lambda x: x[0])
+            except Exception:
+                pass
+
+        if not chunks:
+            try:
+                from services.course_db_service import get_connection
+                import re
+                with get_connection() as conn:
+                    if video_id:
+                        row = conn.execute("SELECT content FROM video_detailed_notes WHERE course_id = ? AND video_id = ?", (effective_course_id, video_id)).fetchone()
+                        if not row or not row["content"]:
+                            row = conn.execute("SELECT content FROM video_notes WHERE course_id = ? AND video_id = ?", (effective_course_id, video_id)).fetchone()
+                        content = row["content"] if row else ""
+                        if content:
+                            secs = re.split(r"(?=\n###?\s+)", content)
+                            for s_idx, sec in enumerate(secs):
+                                s_str = sec.strip()
+                                if len(s_str) >= 40:
+                                    chunks.append((s_idx * 60.0, (s_idx + 1) * 60.0, s_str))
+            except Exception:
+                pass
         with _chunks_cache_lock:
             if len(_lecture_chunks_cache) > 150:
                 _lecture_chunks_cache.pop(next(iter(_lecture_chunks_cache)))

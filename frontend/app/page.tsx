@@ -233,16 +233,41 @@ function LectureProcessingCard({
   onSelectVideo: (vid: string) => void;
 }) {
   const completedVideos = videos.filter((v: Video) => v.status === "completed");
+  const isFailed = video.status === "failed";
+  const isProcessing = video.status === "processing";
+
   return (
-    <div className="rounded-xl border border-amber-200/70 bg-amber-50/40 p-8 text-center dark:border-amber-900/40 dark:bg-amber-950/20">
-      <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400">
-        <div className="h-5 w-5 animate-spin rounded-full border-2 border-amber-600 border-t-transparent dark:border-amber-400" />
+    <div className={`rounded-xl border p-8 text-center ${
+      isFailed 
+        ? "border-red-200/70 bg-red-50/40 dark:border-red-900/40 dark:bg-red-950/20"
+        : "border-amber-200/70 bg-amber-50/40 dark:border-amber-900/40 dark:bg-amber-950/20"
+    }`}>
+      <div className={`mx-auto flex h-12 w-12 items-center justify-center rounded-full ${
+        isFailed 
+          ? "bg-red-100 text-red-600 dark:bg-red-900/40 dark:text-red-400"
+          : "bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400"
+      }`}>
+        {isFailed ? (
+          <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+        ) : (
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-amber-600 border-t-transparent dark:border-amber-400" />
+        )}
       </div>
       <h3 className="mt-4 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-        {video.status === "processing" ? "Transcribing & Indexing Lecture..." : "Lecture Queued for Processing"}
+        {isFailed 
+          ? "Transcription Incomplete for this Lecture" 
+          : isProcessing 
+            ? "Transcribing & Indexing Lecture..." 
+            : "Lecture Queued for Processing"}
       </h3>
       <p className="mx-auto mt-1 max-w-md text-xs text-zinc-500 dark:text-zinc-400">
-        This marathon lecture has no pre-existing YouTube subtitles and is being transcribed locally using GPU Whisper. Notes, quizzes, and flashcards will unlock automatically as soon as indexing finishes.
+        {isFailed
+          ? "YouTube captions or audio were unavailable or restricted for this specific video. You can select another ready lecture below or ask questions about this course in AI Chat."
+          : isProcessing
+            ? "Extracting speech and preparing full syllabus notes, quizzes, and concept flashcards. They will unlock automatically in a few moments."
+            : "Waiting for preceding lectures in this course playlist to finish indexing. Lectures index progressively in the background."}
       </p>
       {completedVideos.length > 0 && (
         <div className="mt-5 border-t border-amber-200/50 pt-4 dark:border-amber-900/30">
@@ -263,7 +288,6 @@ function LectureProcessingCard({
           </div>
         </div>
       )}
-
     </div>
   );
 }
@@ -2115,7 +2139,7 @@ export default function Home() {
                       {notesMode === "all" ? "Compiling full course handbook..." : "Synthesizing study notes..."}
                     </p>
                   </div>
-                ) : activeVideo && activeVideo.status !== "completed" && notesMode === "single" ? (
+                ) : activeVideo && activeVideo.status !== "completed" && !activeVideo.has_notes && !notes && notesMode === "single" ? (
                   <LectureProcessingCard
                     video={activeVideo}
                     videos={videos}
@@ -2311,7 +2335,7 @@ export default function Home() {
                     <div className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-zinc-900 border-t-transparent dark:border-white"></div>
                     <p className="mt-3 text-xs font-medium">Formulating quiz questions...</p>
                   </div>
-                ) : activeVideo && activeVideo.status !== "completed" && selectedVideoId !== "ALL" ? (
+                ) : activeVideo && activeVideo.status !== "completed" && quiz.length === 0 && selectedVideoId !== "ALL" ? (
                   <LectureProcessingCard
                     video={activeVideo}
                     videos={videos}
@@ -2434,7 +2458,7 @@ export default function Home() {
                     <div className="inline-block h-6 w-6 animate-spin rounded-full border-2 border-zinc-900 border-t-transparent dark:border-white"></div>
                     <p className="mt-3 text-xs font-medium">Generating concept cards...</p>
                   </div>
-                ) : activeVideo && activeVideo.status !== "completed" && selectedVideoId !== "ALL" ? (
+                ) : activeVideo && activeVideo.status !== "completed" && flashcards.length === 0 && selectedVideoId !== "ALL" ? (
                   <div className="mt-6">
                     <LectureProcessingCard
                       video={activeVideo}

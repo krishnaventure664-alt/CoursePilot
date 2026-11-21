@@ -219,6 +219,7 @@ def transcribe_audio_slice(
     api_key: str,
     time_offset: float = 0.0,
     video_title: str = "",
+    mime_type: str = "audio/mp3",
 ) -> list[dict]:
     """
     Transcribe an audio slice using Gemini Audio Understanding.
@@ -247,7 +248,7 @@ FORMAT REQUIREMENTS:
         "contents": [
             {
                 "parts": [
-                    {"file_data": {"mime_type": "audio/mp3", "file_uri": file_uri}},
+                    {"file_data": {"mime_type": mime_type, "file_uri": file_uri}},
                     {"text": prompt},
                 ]
             }
@@ -387,12 +388,14 @@ def transcribe_audio_file_with_gemini(
         # Fallback: direct upload of full audio file to Gemini File API
         try:
             logger.info("Slicing produced 0 segments, attempting direct upload of full audio to Gemini...")
+            ext = os.path.splitext(audio_path)[1].lower().lstrip(".")
+            direct_mime = "audio/webm" if ext == "webm" else ("audio/mp4" if ext in ["m4a", "mp4"] else "audio/mp3")
             file_meta = upload_audio_to_gemini(audio_path, api_key)
             if file_meta:
                 f_uri = file_meta.get("uri")
                 f_name = file_meta.get("name")
                 try:
-                    direct_segs = transcribe_audio_slice(f_uri, api_key, time_offset=0.0, video_title=video_title)
+                    direct_segs = transcribe_audio_slice(f_uri, api_key, time_offset=0.0, video_title=video_title, mime_type=direct_mime)
                     if direct_segs:
                         all_segments = direct_segs
                 finally:
