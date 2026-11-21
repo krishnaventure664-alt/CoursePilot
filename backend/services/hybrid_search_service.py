@@ -158,52 +158,62 @@ def hybrid_search(
     dense_query = encoded_query["dense"]
     sparse_query = encoded_query["sparse"]
 
-    # --------------------------------------------------
-    # 2 & 3. Concurrent Dense & Sparse retrieval
-    # --------------------------------------------------
-    from concurrent.futures import ThreadPoolExecutor
-
-    def _fetch_dense():
-        return search_dense_chunks(
-            query_embedding=dense_query,
-            course_id=effective_course_id,
-            n_results=DENSE_TOP_K
-        )
-
-    def _fetch_sparse():
-        return search_sparse_chunks(
-            query_sparse_weights=sparse_query,
-            course_id=effective_course_id,
-            n_results=SPARSE_TOP_K
-        )
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        dense_future = executor.submit(_fetch_dense)
-        sparse_future = executor.submit(_fetch_sparse)
-        dense_results_raw = dense_future.result()
-        sparse_results = sparse_future.result()
+    is_zero_dense = not dense_query or all(v == 0.0 for v in dense_query)
+    is_empty_sparse = not sparse_query
 
     dense_results = []
-    if dense_results_raw and dense_results_raw.get("ids") and dense_results_raw["ids"][0]:
-        for rank, chunk_id in enumerate(
-            dense_results_raw["ids"][0],
-            start=1
-        ):
-            dense_results.append({
-                "chunk_id": chunk_id,
-                "dense_rank": rank,
-                "dense_distance": dense_results_raw["distances"][0][rank - 1]
-            })
+    sparse_results = []
+    rrf_results = []
 
-    # --------------------------------------------------
-    # 4. RRF fusion
-    # --------------------------------------------------
+    if not is_zero_dense or not is_empty_sparse:
+        # --------------------------------------------------
+        # 2 & 3. Concurrent Dense & Sparse retrieval
+        # --------------------------------------------------
+        from concurrent.futures import ThreadPoolExecutor
 
-    rrf_results = reciprocal_rank_fusion(
-        dense_results=dense_results,
-        sparse_results=sparse_results,
-        top_k=RRF_TOP_K
-    )
+        def _fetch_dense():
+            if is_zero_dense:
+                return None
+            return search_dense_chunks(
+                query_embedding=dense_query,
+                course_id=effective_course_id,
+                n_results=DENSE_TOP_K
+            )
+
+        def _fetch_sparse():
+            if is_empty_sparse:
+                return []
+            return search_sparse_chunks(
+                query_sparse_weights=sparse_query,
+                course_id=effective_course_id,
+                n_results=SPARSE_TOP_K
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            dense_future = executor.submit(_fetch_dense)
+            sparse_future = executor.submit(_fetch_sparse)
+            dense_results_raw = dense_future.result()
+            sparse_results = sparse_future.result()
+
+        if dense_results_raw and dense_results_raw.get("ids") and dense_results_raw["ids"][0]:
+            for rank, chunk_id in enumerate(
+                dense_results_raw["ids"][0],
+                start=1
+            ):
+                dense_results.append({
+                    "chunk_id": chunk_id,
+                    "dense_rank": rank,
+                    "dense_distance": dense_results_raw["distances"][0][rank - 1]
+                })
+
+        # --------------------------------------------------
+        # 4. RRF fusion
+        # --------------------------------------------------
+        rrf_results = reciprocal_rank_fusion(
+            dense_results=dense_results,
+            sparse_results=sparse_results,
+            top_k=RRF_TOP_K
+        )
 
     reranker_candidates = []
 
@@ -315,21 +325,49 @@ def hybrid_search(
                     pass
 
             if candidate_items:
-                q_words = set(re.findall(r"\w+", query.lower()))
+                stop_words = {
+                    "the", "a", "an", "and", "or", "in", "on", "at", "to", "for", "of", "with",
+                    "by", "as", "is", "are", "was", "were", "it", "its", "this", "that", "from",
+                    "be", "what", "which", "how", "explain", "can", "you", "tell", "me", "about"
+                }
+                doc_tokens = [re.findall(r"\w+", c["document"].lower()) for c in candidate_items]
+                N = len(doc_tokens)
+                avgdl = (sum(len(d) for d in doc_tokens) / (N or 1)) or 1.0
+                k1 = 1.5
+                b = 0.75
 
-                def _score_chunk(doc_text):
-                    doc_words = re.findall(r"\w+", doc_text.lower())
-                    counts = Counter(doc_words)
-                    tot = len(doc_words) or 1
-                    return sum((counts[w] / tot) * (1.0 + math.log(1.0 + counts[w])) for w in q_words if w in counts)
+                dfs = Counter()
+                for d in doc_tokens:
+                    dfs.update(set(d))
+
+                q_tokens = [w for w in re.findall(r"\w+", query.lower()) if w not in stop_words]
+                if not q_tokens:
+                    q_tokens = re.findall(r"\w+", query.lower())
+
+                def _bm25_score(d_tokens):
+                    counts = Counter(d_tokens)
+                    dl = len(d_tokens) or 1
+                    score = 0.0
+                    for w in q_tokens:
+                        if w in counts:
+                            df = dfs.get(w, 0)
+                            idf = math.log(1.0 + (N - df + 0.5) / (df + 0.5))
+                            f = counts[w]
+                            num = f * (k1 + 1.0)
+                            denom = f + k1 * (1.0 - b + b * (dl / avgdl))
+                            score += idf * (num / denom)
+                    return score
 
                 scored = []
-                for c in candidate_items:
-                    s = _score_chunk(c["document"])
+                for c, d in zip(candidate_items, doc_tokens):
+                    s = _bm25_score(d)
                     if s > 0:
                         scored.append((c, s))
 
                 scored.sort(key=lambda x: x[1], reverse=True)
+
+                if not scored:
+                    scored = [(c, 0.0) for c in candidate_items[:final_top_k]]
 
                 for c, sc in scored[:final_top_k]:
                     meta = c.get("metadata", {})
