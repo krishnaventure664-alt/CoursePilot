@@ -5,7 +5,22 @@ import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import { UserButton, useUser, useAuth } from "@clerk/nextjs";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+function getAdminApiUrl(): string {
+  if (typeof window !== "undefined") {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const serverParam = params.get("server");
+      if (serverParam && (serverParam.startsWith("http://") || serverParam.startsWith("https://"))) {
+        return serverParam.trim().replace(/\/+$/, "");
+      }
+    } catch {}
+    const saved = localStorage.getItem("coursepilot_api_url");
+    if (saved && (saved.startsWith("http://") || saved.startsWith("https://"))) {
+      return saved.trim().replace(/\/+$/, "");
+    }
+  }
+  return (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000").trim().replace(/\/+$/, "");
+}
 
 type FeedbackItem = {
   id: number;
@@ -33,6 +48,7 @@ type AdminMetrics = {
 export default function AdminPage() {
   const { user, isLoaded, isSignedIn } = useUser();
   const { getToken } = useAuth();
+  const API_URL = getAdminApiUrl();
 
   const [feedback, setFeedback] = useState<FeedbackItem[]>([]);
   const [metrics, setMetrics] = useState<AdminMetrics | null>(null);

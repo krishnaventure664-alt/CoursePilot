@@ -6,7 +6,28 @@ import { useEffect, useState, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { UserButton, useUser, useAuth } from "@clerk/nextjs";
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000";
+const DEFAULT_API_URL = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000").trim().replace(/\/+$/, "");
+
+function getInitialApiUrl(): string {
+  if (typeof window !== "undefined") {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const serverParam = params.get("server");
+      if (serverParam && (serverParam.startsWith("http://") || serverParam.startsWith("https://"))) {
+        const cleanServer = serverParam.trim().replace(/\/+$/, "");
+        localStorage.setItem("coursepilot_api_url", cleanServer);
+        return cleanServer;
+      }
+    } catch {
+      // ignore
+    }
+    const saved = localStorage.getItem("coursepilot_api_url");
+    if (saved && (saved.startsWith("http://") || saved.startsWith("https://"))) {
+      return saved.trim().replace(/\/+$/, "");
+    }
+  }
+  return DEFAULT_API_URL;
+}
 
 type Course = {
   id: number;
@@ -274,6 +295,67 @@ export default function Home() {
   const { user, isLoaded, isSignedIn } = useUser();
   const { getToken } = useAuth();
 
+  const [apiUrl, setApiUrl] = useState<string>(DEFAULT_API_URL);
+  const [backendStatus, setBackendStatus] = useState<"checking" | "connected" | "disconnected">("checking");
+  const [showServerModal, setShowServerModal] = useState<boolean>(false);
+  const [serverInput, setServerInput] = useState<string>("");
+  const [serverError, setServerError] = useState<string | null>(null);
+  const [serverSuccess, setServerSuccess] = useState<string | null>(null);
+  const [copiedShareLink, setCopiedShareLink] = useState<boolean>(false);
+
+  const API_URL = apiUrl;
+
+  useEffect(() => {
+    const initUrl = getInitialApiUrl();
+    setApiUrl(initUrl);
+    setServerInput(initUrl);
+
+    fetch(`${initUrl}/`, { headers: { "ngrok-skip-browser-warning": "true" } })
+      .then((res) => {
+        if (res.ok) setBackendStatus("connected");
+        else setBackendStatus("disconnected");
+      })
+      .catch(() => setBackendStatus("disconnected"));
+  }, []);
+
+  const handleConnectServer = async (newUrl: string) => {
+    const clean = newUrl.trim().replace(/\/+$/, "");
+    if (!clean.startsWith("http://") && !clean.startsWith("https://")) {
+      setServerError("URL must start with http:// or https://");
+      setServerSuccess(null);
+      return;
+    }
+    setServerError(null);
+    setServerSuccess(null);
+    setBackendStatus("checking");
+
+    try {
+      const res = await fetch(`${clean}/`, { headers: { "ngrok-skip-browser-warning": "true" } });
+      if (res.ok) {
+        localStorage.setItem("coursepilot_api_url", clean);
+        setApiUrl(clean);
+        setServerInput(clean);
+        setBackendStatus("connected");
+        setServerSuccess("Successfully connected to backend!");
+        try {
+          const userParam = user?.id ? `?user_id=${encodeURIComponent(user.id)}` : "";
+          const courseRes = await authFetch(`${clean}/courses${userParam}`);
+          if (courseRes.ok) {
+            const data = await courseRes.json();
+            setCourses(data.courses ?? []);
+          }
+        } catch {}
+        setTimeout(() => setShowServerModal(false), 800);
+      } else {
+        setServerError(`Server responded with status ${res.status}`);
+        setBackendStatus("disconnected");
+      }
+    } catch {
+      setServerError("Could not reach backend at that URL. Ensure your backend and tunnel are running.");
+      setBackendStatus("disconnected");
+    }
+  };
+
   useEffect(() => {
     if (isLoaded && !isSignedIn) {
       router.replace("/sign-in");
@@ -472,7 +554,7 @@ export default function Home() {
       if (retryTimer) clearTimeout(retryTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id]);
+  }, [user?.id, apiUrl]);
 
   // 2. Real-time background indexing progress polling (Auto-refreshes UI seamlessly with Zero-F5 requirement)
   useEffect(() => {
@@ -2016,6 +2098,38 @@ export default function Home() {
               </button>
             </div>
 
+            {/* Backend Status / Settings Pill */}
+            <button
+              onClick={() => {
+                setServerInput(apiUrl);
+                setServerError(null);
+                setServerSuccess(null);
+                setShowServerModal(true);
+              }}
+              title="Click to change backend server or get friend share link"
+              className={`flex items-center gap-1.5 rounded-full px-2 sm:px-2.5 py-1 text-xs font-medium transition border ${
+                backendStatus === "connected"
+                  ? "bg-emerald-500/10 text-emerald-700 border-emerald-500/20 hover:bg-emerald-500/20 dark:text-emerald-400 dark:border-emerald-500/30"
+                  : backendStatus === "checking"
+                  ? "bg-amber-500/10 text-amber-700 border-amber-500/20 animate-pulse dark:text-amber-400"
+                  : "bg-rose-500/10 text-rose-700 border-rose-500/20 hover:bg-rose-500/20 dark:text-rose-400 dark:border-rose-500/30"
+              }`}
+            >
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  backendStatus === "connected"
+                    ? "bg-emerald-500"
+                    : backendStatus === "checking"
+                    ? "bg-amber-500"
+                    : "bg-rose-500"
+                }`}
+              />
+              <span className="hidden sm:inline">
+                {backendStatus === "connected" ? "Backend Online" : backendStatus === "checking" ? "Connecting..." : "Server Offline"}
+              </span>
+              <span className="sm:hidden font-mono text-[10px]">API</span>
+            </button>
+
             {/* Clerk User Profile */}
             <div className="flex items-center gap-2 pl-1 sm:pl-2">
               {user && (
@@ -2027,6 +2141,37 @@ export default function Home() {
             </div>
           </div>
         </header>
+
+        {/* SERVER DISCONNECTED BANNER */}
+        {backendStatus === "disconnected" && (
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-2 border-b border-amber-500/30 bg-amber-50 px-4 py-2 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+            <div className="flex items-center gap-2">
+              <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+              <span>
+                Backend offline or tunnel changed (<code className="rounded bg-amber-200/60 px-1 py-0.5 font-mono dark:bg-amber-900/60">{apiUrl}</code>).
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => handleConnectServer("http://127.0.0.1:8000")}
+                className="rounded bg-amber-200/80 hover:bg-amber-300 px-2.5 py-1 font-medium text-amber-950 transition dark:bg-amber-800 dark:text-amber-100"
+              >
+                Use Localhost
+              </button>
+              <button
+                onClick={() => {
+                  setServerInput(apiUrl);
+                  setServerError(null);
+                  setServerSuccess(null);
+                  setShowServerModal(true);
+                }}
+                className="rounded bg-amber-700 hover:bg-amber-800 px-2.5 py-1 font-medium text-white transition shadow-xs"
+              >
+                Update Tunnel URL
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* LIVE BACKGROUND INDEXING PROGRESS BANNER */}
         {progress && progress.status === "indexing" && progress.percentage < 100 && (
@@ -2729,6 +2874,103 @@ export default function Home() {
                 </div>
               </form>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* SERVER SETTINGS MODAL */}
+      {showServerModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-6 shadow-2xl dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="flex items-center justify-between border-b border-zinc-200 pb-4 dark:border-zinc-800">
+              <div className="flex items-center gap-2.5">
+                <span className={`h-3 w-3 rounded-full ${backendStatus === "connected" ? "bg-emerald-500" : "bg-rose-500"}`} />
+                <h3 className="text-base font-bold text-zinc-900 dark:text-white">CoursePilot Server Connection</h3>
+              </div>
+              <button
+                onClick={() => setShowServerModal(false)}
+                className="rounded-lg p-1 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-4 text-xs text-zinc-600 dark:text-zinc-400">
+              <p>
+                Connect CoursePilot to your laptop&apos;s GPU backend. Enter your active Cloudflare Tunnel URL or connect to localhost.
+              </p>
+
+              <div>
+                <label className="mb-1 block font-semibold text-zinc-800 dark:text-zinc-200">
+                  Backend Server URL
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={serverInput}
+                    onChange={(e) => setServerInput(e.target.value)}
+                    placeholder="https://your-tunnel.trycloudflare.com or http://127.0.0.1:8000"
+                    className="flex-1 rounded-lg border border-zinc-300 bg-zinc-50 px-3 py-2 font-mono text-xs text-zinc-900 focus:border-zinc-900 focus:outline-hidden dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
+                  />
+                  <button
+                    onClick={() => handleConnectServer(serverInput)}
+                    className="cursor-pointer rounded-lg bg-zinc-900 px-4 py-2 font-semibold text-white hover:bg-zinc-800 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-100"
+                  >
+                    Connect
+                  </button>
+                </div>
+              </div>
+
+              {serverError && (
+                <div className="rounded-lg bg-rose-500/10 p-2.5 text-rose-600 dark:text-rose-400 font-medium">
+                  {serverError}
+                </div>
+              )}
+
+              {serverSuccess && (
+                <div className="rounded-lg bg-emerald-500/10 p-2.5 text-emerald-600 dark:text-emerald-400 font-medium">
+                  {serverSuccess}
+                </div>
+              )}
+
+              <div className="pt-2">
+                <span className="font-semibold text-zinc-800 dark:text-zinc-200">Quick Shortcuts:</span>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    onClick={() => handleConnectServer("http://127.0.0.1:8000")}
+                    className="cursor-pointer rounded-md border border-zinc-300 bg-zinc-100 px-2.5 py-1.5 font-medium text-zinc-800 hover:bg-zinc-200 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
+                  >
+                    💻 Connect to Localhost (127.0.0.1:8000)
+                  </button>
+                </div>
+              </div>
+
+              {apiUrl.startsWith("https://") && (
+                <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-3.5 dark:border-zinc-800 dark:bg-zinc-800/50">
+                  <span className="font-semibold text-zinc-800 dark:text-zinc-200">1-Click Share Link for Friends / Phone:</span>
+                  <p className="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400">
+                    Send this link to friends so they don&apos;t have to enter the URL manually:
+                  </p>
+                  <div className="mt-2 flex items-center gap-2">
+                    <input
+                      readOnly
+                      value={`https://course-pilot-eight.vercel.app/?server=${encodeURIComponent(apiUrl)}`}
+                      className="flex-1 select-all rounded border border-zinc-300 bg-white px-2 py-1 font-mono text-[11px] text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
+                    />
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(`https://course-pilot-eight.vercel.app/?server=${encodeURIComponent(apiUrl)}`);
+                        setCopiedShareLink(true);
+                        setTimeout(() => setCopiedShareLink(false), 2000);
+                      }}
+                      className="shrink-0 cursor-pointer rounded bg-zinc-800 px-2.5 py-1 font-medium text-white hover:bg-zinc-700 dark:bg-zinc-200 dark:text-zinc-900"
+                    >
+                      {copiedShareLink ? "Copied!" : "Copy"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
