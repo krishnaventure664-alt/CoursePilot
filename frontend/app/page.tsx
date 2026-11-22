@@ -292,6 +292,7 @@ export default function Home() {
       if (token) {
         headers.set("Authorization", `Bearer ${token}`);
       }
+      headers.set("ngrok-skip-browser-warning", "true");
       return fetch(input, { ...init, headers });
     };
   }, [getToken]);
@@ -912,7 +913,7 @@ export default function Home() {
       if (params.length > 0) {
         url += (url.includes("?") ? "&" : "?") + params.join("&");
       }
-      const res = await fetch(url);
+      const res = await authFetch(url);
       const data = await res.json();
       const qList = data.quiz || [];
       const sInfo = data.set_index !== undefined ? {
@@ -972,7 +973,7 @@ export default function Home() {
       if (params.length > 0) {
         url += (url.includes("?") ? "&" : "?") + params.join("&");
       }
-      const res = await fetch(url);
+      const res = await authFetch(url);
       const data = await res.json();
       const fcList = data.flashcards || [];
       const sInfo = data.set_index !== undefined ? {

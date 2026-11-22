@@ -48,6 +48,7 @@ export default function AdminPage() {
     if (token) {
       headers.set("Authorization", `Bearer ${token}`);
     }
+    headers.set("ngrok-skip-browser-warning", "true");
     return fetch(input, { ...init, headers });
   };
 
