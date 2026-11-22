@@ -57,6 +57,7 @@ from services.course_db_service import (
     clone_vault_course_to_user,
     can_delete_course_vectors,
     get_canonical_course_id,
+    sync_vault_to_existing_course,
 )
 from services.study_tools_service import (
     get_or_generate_notes,
@@ -198,108 +199,133 @@ def list_courses(request: Request, user_id: str = Depends(get_current_user)):
     return {"courses": courses}
 
 
+import threading
+_indexing_semaphore = threading.Semaphore(1)
+
 def index_playlist_in_background(course_id: int, items: list):
     """
     High-throughput, low-load asynchronous indexing for 40+ hour playlists:
-    1. Sequentially chunks & embeds each video into BGE-M3 dense ChromaDB and sparse SQLite.
-    2. Immediately updates live progress per video so the frontend renders green checkmarks progressively.
-    3. Eagerly pre-generates study tools (Notes, Quiz, Flashcards) for Video 1 only, ensuring
-       instant 0ms readiness for the active lecture without bombarding the LLM or freezing the user's PC.
-    4. Automatically purges GPU VRAM and CPU garbage between videos with a 20ms thermal breather,
-       keeping computer fans silent and RAM usage minimal even across 50+ video playlists.
+    Protected by _indexing_semaphore(1) to guarantee that even if 10+ users add courses simultaneously,
+    indexing tasks run safely one-by-one without GPU VRAM exhaustion or PC freeze.
     """
-    import gc
-    import time
-    try:
-        import torch
-        has_cuda = torch.cuda.is_available()
-    except Exception:
-        has_cuda = False
+    with _indexing_semaphore:
+        import gc
+        import time
+        try:
+            import torch
+            has_cuda = torch.cuda.is_available()
+        except Exception:
+            has_cuda = False
 
-    from concurrent.futures import ThreadPoolExecutor
-    from services.bge_m3_vector_store_service import collection
+        from concurrent.futures import ThreadPoolExecutor
+        from services.bge_m3_vector_store_service import collection
+        from services.course_db_service import get_connection
+
+        # 1. State check: Verify course still exists and isn't already completed
+        with get_connection() as conn:
+            c_row = conn.execute("SELECT * FROM courses WHERE id = ?", (course_id,)).fetchone()
+            if not c_row:
+                print(f"[Queue Worker] Course {course_id} no longer exists. Skipping.")
+                return
+            if c_row["status"] == "completed":
+                print(f"[Queue Worker] Course {course_id} is already completed. Skipping redundant indexing.")
+                return
+            current_playlist_id = c_row["playlist_id"]
+
+        # 2. Global Vault match check: Did another job complete this playlist while we waited in queue?
+        completed_vault = find_completed_vault_course(current_playlist_id)
+        if completed_vault and completed_vault["id"] != course_id:
+            print(f"[Queue Vault Match] Course {course_id} matched completed vault course {completed_vault['id']}! Instant sync...")
+            synced = sync_vault_to_existing_course(
+                source_course_id=completed_vault["id"],
+                target_course_id=course_id,
+            )
+            if synced:
+                update_course_progress(course_id, completed_vault["total_videos"], completed_vault["total_videos"], "completed")
+                print(f"[Queue Vault Match] Course {course_id} successfully linked to vault course {completed_vault['id']} in 0.01s!")
+                return
+
+        total = len(items)
+        completed = 0
     
-    total = len(items)
-    completed = 0
-
-    indexed_data = collection.get(
-        where={"course_id": course_id},
-        include=["metadatas"],
-    )
-    indexed_video_ids = {
-        metadata["video_id"]
-        for metadata in indexed_data["metadatas"]
-        if metadata and metadata.get("video_id")
-    }
-
-    # Background executor for active lecture pre-generation (1 worker prevents API contention)
-    first_lecture_executor = ThreadPoolExecutor(max_workers=1)
-    first_lecture_started = False
-
-    def _safe_pregenerate_active_lecture(c_id: int, v_id: str):
-        """Pre-generate Notes, Quiz, and Flashcards for the active lecture in background."""
-        try:
-            get_or_generate_notes(c_id, v_id)
-        except Exception as note_err:
-            print(f"Background note generation for active lecture {v_id}: {note_err}")
-        try:
-            get_or_generate_quiz(c_id, v_id)
-        except Exception as q_err:
-            print(f"Background quiz generation for active lecture {v_id}: {q_err}")
-        try:
-            get_or_generate_flashcards(c_id, v_id)
-        except Exception as f_err:
-            print(f"Background flashcard generation for active lecture {v_id}: {f_err}")
-
-    for position, item in enumerate(items, start=1):
-        snippet = item["snippet"]
-        video_id = snippet["resourceId"]["videoId"]
-        title = snippet["title"]
-
-        if video_id in indexed_video_ids:
-            completed += 1
-            save_course_video(course_id, video_id, title, position, "completed")
+        indexed_data = collection.get(
+            where={"course_id": course_id},
+            include=["metadatas"],
+        )
+        indexed_video_ids = {
+            metadata["video_id"]
+            for metadata in indexed_data["metadatas"]
+            if metadata and metadata.get("video_id")
+        }
+    
+        # Background executor for active lecture pre-generation (1 worker prevents API contention)
+        first_lecture_executor = ThreadPoolExecutor(max_workers=1)
+        first_lecture_started = False
+    
+        def _safe_pregenerate_active_lecture(c_id: int, v_id: str):
+            """Pre-generate Notes, Quiz, and Flashcards for the active lecture in background."""
+            try:
+                get_or_generate_notes(c_id, v_id)
+            except Exception as note_err:
+                print(f"Background note generation for active lecture {v_id}: {note_err}")
+            try:
+                get_or_generate_quiz(c_id, v_id)
+            except Exception as q_err:
+                print(f"Background quiz generation for active lecture {v_id}: {q_err}")
+            try:
+                get_or_generate_flashcards(c_id, v_id)
+            except Exception as f_err:
+                print(f"Background flashcard generation for active lecture {v_id}: {f_err}")
+    
+        for position, item in enumerate(items, start=1):
+            snippet = item["snippet"]
+            video_id = snippet["resourceId"]["videoId"]
+            title = snippet["title"]
+    
+            if video_id in indexed_video_ids:
+                completed += 1
+                save_course_video(course_id, video_id, title, position, "completed")
+                update_course_progress(course_id, completed, total, "indexing")
+                if not first_lecture_started and position == 1:
+                    first_lecture_started = True
+                    first_lecture_executor.submit(_safe_pregenerate_active_lecture, course_id, video_id)
+                continue
+    
+            save_course_video(course_id, video_id, title, position, "processing")
+            try:
+                res = index_video(video_id=video_id, course_id=course_id, video_title=title)
+                video_status = "completed" if res.get("chunks_indexed", 0) > 0 else "failed"
+            except Exception as e:
+                video_status = "failed"
+                print(f"Error indexing video {video_id}: {e}")
+    
+            if video_status == "completed":
+                completed += 1
+                # Eagerly launch study tools pre-generation for the very first completed lecture
+                if not first_lecture_started:
+                    first_lecture_started = True
+                    first_lecture_executor.submit(_safe_pregenerate_active_lecture, course_id, video_id)
+    
+            save_course_video(course_id, video_id, title, position, video_status)
             update_course_progress(course_id, completed, total, "indexing")
-            if not first_lecture_started and position == 1:
-                first_lecture_started = True
-                first_lecture_executor.submit(_safe_pregenerate_active_lecture, course_id, video_id)
-            continue
-
-        save_course_video(course_id, video_id, title, position, "processing")
-        try:
-            res = index_video(video_id=video_id, course_id=course_id, video_title=title)
-            video_status = "completed" if res.get("chunks_indexed", 0) > 0 else "failed"
-        except Exception as e:
-            video_status = "failed"
-            print(f"Error indexing video {video_id}: {e}")
-
-        if video_status == "completed":
-            completed += 1
-            # Eagerly launch study tools pre-generation for the very first completed lecture
-            if not first_lecture_started:
-                first_lecture_started = True
-                first_lecture_executor.submit(_safe_pregenerate_active_lecture, course_id, video_id)
-
-        save_course_video(course_id, video_id, title, position, video_status)
-        update_course_progress(course_id, completed, total, "indexing")
-
-        # Thermal breather + immediate tensor garbage collection keeps CPU/GPU cool
+    
+            # Thermal breather + immediate tensor garbage collection keeps CPU/GPU cool
+            gc.collect()
+            if has_cuda:
+                torch.cuda.empty_cache()
+            time.sleep(0.02)
+    
+        first_lecture_executor.shutdown(wait=False)
+    
+        final_status = "completed" if completed > 0 else "failed"
+        update_course_progress(course_id, completed, total, final_status)
+        print(f"Course {course_id} background indexing finished: {completed}/{total} videos indexed.")
+    
+        # Deep cleanup: return all freed memory back to Windows OS
         gc.collect()
         if has_cuda:
             torch.cuda.empty_cache()
-        time.sleep(0.02)
-
-    first_lecture_executor.shutdown(wait=False)
-
-    final_status = "completed" if completed > 0 else "failed"
-    update_course_progress(course_id, completed, total, final_status)
-    print(f"Course {course_id} background indexing finished: {completed}/{total} videos indexed.")
-
-    # Deep cleanup: return all freed memory back to Windows OS
-    gc.collect()
-    if has_cuda:
-        torch.cuda.empty_cache()
-
+    
 
 @app.post("/courses")
 @limiter.limit("10/minute")

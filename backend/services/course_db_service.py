@@ -7,8 +7,9 @@ DB_PATH = SQLITE_DB_PATH
 
 
 def get_connection():
-    connection = sqlite3.connect(DB_PATH, timeout=30)
+    connection = sqlite3.connect(DB_PATH, timeout=60.0)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA busy_timeout = 60000;")
     connection.execute("PRAGMA journal_mode=WAL;")
     connection.execute("PRAGMA synchronous=NORMAL;")
     connection.execute("PRAGMA cache_size=-64000;")
@@ -474,7 +475,7 @@ def get_course_progress(course_id: int):
             "completed": completed,
             "total": total,
             "percentage": min(100, percent),
-            "current_video": active_video["title"] if active_video else None,
+            "current_video": active_video["title"] if active_video else ("Queued in background..." if status == "indexing" else None),
         }
 def delete_course_from_db(course_id: int):
     """Deletes all course data, notes, quizzes, and flashcards, then reclaims disk space."""
@@ -489,7 +490,8 @@ def delete_course_from_db(course_id: int):
 
     # Reclaim physical disk bytes
     try:
-        raw_conn = sqlite3.connect(DB_PATH, isolation_level=None)
+        raw_conn = sqlite3.connect(DB_PATH, timeout=60.0, isolation_level=None)
+        raw_conn.execute("PRAGMA busy_timeout = 60000;")
         raw_conn.execute("VACUUM")
         raw_conn.close()
     except Exception:
@@ -645,6 +647,109 @@ def clone_vault_course_to_user(source_course_id: int, user_id: str, url: str) ->
 
         row = conn.execute("SELECT * FROM courses WHERE id = ?", (target_id,)).fetchone()
         return dict(row)
+
+
+
+
+def sync_vault_to_existing_course(source_course_id: int, target_course_id: int) -> bool:
+    """
+    Instantly syncs and populates an already-created course from an existing vault course.
+    Used when multiple users queue the same course: the first user indexes it, and when the
+    second user's worker wakes up, it instantly links all videos, study notes, quizzes, and flashcards.
+    """
+    now = time.time()
+    with get_connection() as conn:
+        source = conn.execute("SELECT * FROM courses WHERE id = ?", (source_course_id,)).fetchone()
+        if not source:
+            return False
+
+        canonical_id = source["canonical_course_id"] or source["id"]
+
+        # 1. Update courses table
+        conn.execute(
+            """
+            UPDATE courses
+            SET status = 'completed',
+                total_videos = ?,
+                completed_videos = ?,
+                canonical_course_id = ?
+            WHERE id = ?
+            """,
+            (source["total_videos"], source["completed_videos"], canonical_id, target_course_id),
+        )
+
+        # 2. Update course_videos
+        target_videos = conn.execute("SELECT COUNT(*) as cnt FROM course_videos WHERE course_id = ?", (target_course_id,)).fetchone()
+        if target_videos and target_videos["cnt"] > 0:
+            conn.execute("UPDATE course_videos SET status = 'completed' WHERE course_id = ?", (target_course_id,))
+        else:
+            conn.execute(
+                """
+                INSERT INTO course_videos (course_id, video_id, title, position, status)
+                SELECT ?, video_id, title, position, 'completed'
+                FROM course_videos
+                WHERE course_id = ?
+                """,
+                (target_course_id, source_course_id),
+            )
+
+        # 3. Clone video_notes
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO video_notes (course_id, video_id, content, created_at)
+            SELECT ?, video_id, content, ?
+            FROM video_notes
+            WHERE course_id = ?
+            """,
+            (target_course_id, now, source_course_id),
+        )
+
+        # 4. Clone video_detailed_notes
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO video_detailed_notes (course_id, video_id, content, created_at)
+            SELECT ?, video_id, content, ?
+            FROM video_detailed_notes
+            WHERE course_id = ?
+            """,
+            (target_course_id, now, source_course_id),
+        )
+
+        # 5. Clone course_quizzes
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO course_quizzes (course_id, video_id, set_index, quiz_data, created_at)
+            SELECT ?, video_id, set_index, quiz_data, ?
+            FROM course_quizzes
+            WHERE course_id = ?
+            """,
+            (target_course_id, now, source_course_id),
+        )
+
+        # 6. Clone course_flashcards with status='new' for isolated study progress
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO course_flashcards (course_id, video_id, set_index, front, back, category, status, created_at)
+            SELECT ?, video_id, set_index, front, back, category, 'new', ?
+            FROM course_flashcards
+            WHERE course_id = ?
+            """,
+            (target_course_id, now, source_course_id),
+        )
+
+        # 7. Clone course_answers
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO course_answers (course_id, question_norm, answer, sources_json, created_at)
+            SELECT ?, question_norm, answer, sources_json, ?
+            FROM course_answers
+            WHERE course_id = ?
+            """,
+            (target_course_id, now, source_course_id),
+        )
+
+        conn.commit()
+        return True
 
 
 def can_delete_course_vectors(course_id: int) -> bool:

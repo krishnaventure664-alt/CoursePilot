@@ -6,7 +6,8 @@ DB_PATH = SQLITE_DB_PATH
 
 
 def get_connection():
-    connection = sqlite3.connect(DB_PATH)
+    connection = sqlite3.connect(DB_PATH, timeout=60.0)
+    connection.execute("PRAGMA busy_timeout = 60000;")
     connection.execute("PRAGMA journal_mode=WAL;")
     connection.execute("PRAGMA synchronous=NORMAL;")
     connection.execute("PRAGMA cache_size=-64000;")

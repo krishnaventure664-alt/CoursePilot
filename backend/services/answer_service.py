@@ -16,6 +16,17 @@ adapter = HTTPAdapter(
 )
 http_session.mount("https://", adapter)
 _answer_cache: dict[tuple[int, str], dict] = {}
+_answer_cache_lock = threading.Lock()
+
+def _get_cached_answer_mem(key):
+    with _answer_cache_lock:
+        return _answer_cache.get(key)
+
+def _set_cached_answer_mem(key, val):
+    with _answer_cache_lock:
+        if len(_answer_cache) > 300:
+            _answer_cache.clear()
+        _answer_cache[key] = val
 from dotenv import load_dotenv
 from services.hybrid_search_service import hybrid_search
 from services.query_processing_service import detect_language
@@ -255,13 +266,14 @@ def generate_answer(question: str, course_id: int) -> dict:
     cache_key = (course_id, norm_q)
 
     # 1. 0ms Fast In-Memory Cache Check
-    if cache_key in _answer_cache:
-        return _answer_cache[cache_key]
+    mem_cached = _get_cached_answer_mem(cache_key)
+    if mem_cached:
+        return mem_cached
 
     # 2. < 1ms Persistent SQLite Cache Check
     db_cached = get_cached_answer(course_id, question)
     if db_cached:
-        _answer_cache[cache_key] = db_cached
+        _set_cached_answer_mem(cache_key, db_cached)
         return db_cached
 
     # 3. Thread-safe in-flight coordination to eliminate duplicate concurrent executions
@@ -278,7 +290,7 @@ def generate_answer(question: str, course_id: int) -> dict:
         event.wait(timeout=25.0)
         db_cached = get_cached_answer(course_id, question)
         if db_cached:
-            _answer_cache[cache_key] = db_cached
+            _set_cached_answer_mem(cache_key, db_cached)
             return db_cached
 
     try:
@@ -319,9 +331,7 @@ def generate_answer(question: str, course_id: int) -> dict:
             if answer:
                 clean_ans = sanitize_answer(answer)
                 res_payload = {"answer": clean_ans, "sources": formatted_sources}
-                if len(_answer_cache) > 300:
-                    _answer_cache.clear()
-                _answer_cache[cache_key] = res_payload
+                _set_cached_answer_mem(cache_key, res_payload)
                 try:
                     save_cached_answer(course_id, question, clean_ans, formatted_sources)
                 except Exception:
@@ -365,9 +375,7 @@ def generate_answer(question: str, course_id: int) -> dict:
 
         clean_ans = sanitize_answer(answer)
         result = {"answer": clean_ans, "sources": formatted_sources}
-        if len(_answer_cache) > 300:
-            _answer_cache.clear()
-        _answer_cache[cache_key] = result
+        _set_cached_answer_mem(cache_key, result)
         try:
             save_cached_answer(course_id, question, clean_ans, formatted_sources)
         except Exception:

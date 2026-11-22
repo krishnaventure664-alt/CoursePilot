@@ -5,6 +5,7 @@ logger = logging.getLogger(__name__)
 
 _reranker_model = None
 _reranker_lock = threading.Lock()
+_reranker_inference_lock = threading.Lock()
 
 
 def get_reranker_model():
@@ -58,12 +59,20 @@ def rerank_results(
     for result in search_results:
         pairs.append([query, result["text"]])
 
-    scores = reranker.compute_score(
-        pairs,
-        normalize=True,
-        max_length=256,
-        batch_size=16,
-    )
+    with _reranker_inference_lock:
+        scores = reranker.compute_score(
+            pairs,
+            normalize=True,
+            max_length=256,
+            batch_size=16,
+        )
+
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
 
     if isinstance(scores, float):
         scores = [scores]

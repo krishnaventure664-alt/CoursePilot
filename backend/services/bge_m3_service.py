@@ -7,6 +7,7 @@ MODEL_NAME = "BAAI/bge-m3"
 
 _model = None
 _model_lock = threading.Lock()
+_inference_lock = threading.Lock()
 
 
 def get_bge_m3_model():
@@ -54,7 +55,8 @@ def __getattr__(name: str):
 
 def encode_text(text: str):
     model = get_bge_m3_model()
-    result = model.encode([text], batch_size=1)
+    with _inference_lock:
+        result = model.encode([text], batch_size=1)
 
     dense = result["dense_vecs"][0]
     sparse = result["lexical_weights"][0]
@@ -74,7 +76,8 @@ def encode_texts(texts):
 
     model = get_bge_m3_model()
     # Batch size 16 keeps peak activation memory well under RTX 3050 VRAM limits
-    result = model.encode(texts, batch_size=16)
+    with _inference_lock:
+        result = model.encode(texts, batch_size=16)
 
     dense = result["dense_vecs"]
     sparse = result["lexical_weights"]
