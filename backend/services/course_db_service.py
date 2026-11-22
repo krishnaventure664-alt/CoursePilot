@@ -859,6 +859,34 @@ def get_all_courses_with_videos(user_id: str | None = None):
             c["videos"] = videos_by_course.get(c["id"], [])
         return courses
 
+
+def is_negative_or_refusal_answer(ans: str) -> bool:
+    """Detect if an answer is a negative refusal or failure to locate course content."""
+    if not ans or not ans.strip():
+        return True
+    lower = ans.lower().strip()
+    refusal_phrases = [
+        "could not find enough information",
+        "not provided in the",
+        "not listed or defined",
+        "not listed in the",
+        "not detailed in the",
+        "no mention or definition",
+        "no mention of",
+        "not mentioned in the",
+        "no specific definition",
+        "no direct definition",
+        "not detailed; however",
+        "are not listed",
+        "are not detailed",
+        "are not explicitly listed",
+        "are not explicitly defined",
+        "is not explicitly defined",
+        "is not explicitly mentioned",
+    ]
+    return any(p in lower for p in refusal_phrases)
+
+
 def normalize_answer_question(q: str) -> str:
     """Normalize question by stripping terminal punctuation and extra spacing for instant cache hits."""
     import re
@@ -880,20 +908,33 @@ def get_cached_answer(course_id: int, question: str):
         ).fetchone()
         if not row:
             return None
+        ans_text = row["answer"]
+        if is_negative_or_refusal_answer(ans_text):
+            try:
+                conn.execute(
+                    "DELETE FROM course_answers WHERE course_id = ? AND question_norm = ?",
+                    (course_id, q_norm),
+                )
+                conn.commit()
+            except Exception:
+                pass
+            return None
         try:
             sources = json.loads(row["sources_json"])
         except Exception:
             sources = []
-        return {"answer": row["answer"], "sources": sources}
+        return {"answer": ans_text, "sources": sources}
 
 
 def save_cached_answer(course_id: int, question: str, answer: str, sources: list):
     """Persist verified Q&A answer and source citations for instant zero-latency retrieval."""
     import json
     import time
-    q_norm = normalize_answer_question(question)
     if not answer or not answer.strip():
         return
+    if is_negative_or_refusal_answer(answer):
+        return
+    q_norm = normalize_answer_question(question)
     with get_connection() as conn:
         conn.execute(
             """

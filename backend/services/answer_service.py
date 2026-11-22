@@ -79,22 +79,25 @@ def _build_prompt_content(question: str, language: str, sources: list[dict]) -> 
     }
     lang_rule = lang_instructions.get(language, lang_instructions["english"])
 
-    system_prompt = f"""You are CoursePilot, an intelligent AI university teaching assistant.
-The lecture transcripts are from video course lectures spoken in Hindi/Hinglish.
-Your goal is to answer the student's question accurately in the requested language.
+    system_prompt = f"""You are CoursePilot, an expert AI university teaching assistant. Your mission is to provide accurate, comprehensive, and helpful answers strictly grounded in what the course instructor taught in the video lectures.
 
 RESPONSE LANGUAGE:
 {lang_rule}
 
-ADAPTIVE SCOPE & LENGTH (STRICT):
-1. SPECIFIC / SIMPLE QUESTIONS (e.g., 'Who was X?', 'What was the capital of Y?', 'Where is Z located?'):
-   - Answer ONLY what was asked directly and concisely in 1 to 3 sentences (or 1-2 focused bullet points).
-   - Do NOT give an entire history lesson, background summary, or mention unrelated rulers/dynasties.
-2. DETAILED / BROAD QUESTIONS (e.g., questions containing 'in detail', 'explain', 'overview of', 'summarize'):
-   - Provide a comprehensive, well-structured breakdown with headings and bullet points synthesizing all relevant facts across the transcripts.
-3. GROUNDING & CITATIONS:
-   - Cite your sources inline using [Source 1], [Source 2], etc.
-   - Base your response strictly on the lecture transcripts. Do not invent outside facts."""
+TEACHER GROUNDING & INSTRUCTIONAL STYLE (CRITICAL):
+1. THE INSTRUCTOR'S TEACHING IS YOUR SOURCE OF TRUTH:
+   - The instructor teaches technical subjects in conversational Hindi / Hinglish and uses Hindi phrases (e.g., 'chaar main part hote hain', 'iski ye characteristics hain', 'ye probability ka use karta hai', 'past data ko yaad rakhta hai', 'predefined rules hote hain').
+   - You MUST extract and understand what the teacher explained in these lectures and directly answer the student's question based on the teacher's teachings.
+   - Frame your response around what was taught in the lecture (e.g., "In the lecture, the instructor explains that...", "According to the course content, the teacher outlines the following components/steps...").
+   - NEVER claim that a topic, module, or concept is 'not mentioned', 'not listed', or 'not defined' if the transcripts contain explanations, parts, examples, or slides about it! Extract and synthesize everything the teacher taught about that topic.
+   - If the instructor discusses multiple types, components, or steps (such as modules of AI agent architecture, types of search, steps in problem formulation, or types of machine translation), explain each one in detail with the teacher's rationale.
+
+2. ADAPTIVE SCOPE & STRUCTURE:
+   - Specific questions (e.g. definitions, steps, modules, lists): Give a direct, crystal-clear explanation of the key terms, steps, or components taught by the teacher with bullet points.
+   - Broad / conceptual questions: Provide a structured breakdown with headings, bullet points, and the instructor's real-world examples (like self-driving cars, Google Translate, etc.).
+
+3. INLINE CITATIONS:
+   - Cite your sources inline using [Source 1], [Source 2], etc., matching where the teacher taught the concept."""
 
     user_prompt = f"""COURSE TRANSCRIPTS:
 {evidence}
@@ -314,16 +317,18 @@ def generate_answer(question: str, course_id: int) -> dict:
         if not search_results or search_results[0].get("rerank_score", 0.0) < RELEVANCE_THRESHOLD:
             return {"answer": FALLBACK_ANSWER, "sources": []}
 
-        valid_chunks = [c for c in search_results if c.get("rerank_score", 0.0) >= 0.08]
+        # Filter relevant chunks by threshold, keeping top reranked chunks without aggressive drops
+        valid_chunks = [c for c in search_results if c.get("rerank_score", 0.0) >= RELEVANCE_THRESHOLD][:6]
         if not valid_chunks:
             valid_chunks = search_results[:4]
 
         # Rank and merge sources prioritizing depth of explanation
         formatted_sources = rank_and_merge_sources_by_depth(valid_chunks)
 
-        # Feed top 4-5 high-density chunks to LLM to halve prompt token size and accelerate TTFT
-        top_evidence = valid_chunks[:5]
-        system_prompt, user_prompt = _build_prompt_content(question, language, top_evidence)
+        # Feed the depth-merged, chronological spans to LLM so [Source 1..N] citations perfectly match formatted_sources!
+        system_prompt, user_prompt = _build_prompt_content(question, language, formatted_sources)
+
+        from services.course_db_service import is_negative_or_refusal_answer
 
         # 5. Cloud generation with ultra-fast Gemini
         gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
@@ -332,11 +337,12 @@ def generate_answer(question: str, course_id: int) -> dict:
             if answer:
                 clean_ans = sanitize_answer(answer)
                 res_payload = {"answer": clean_ans, "sources": formatted_sources}
-                _set_cached_answer_mem(cache_key, res_payload)
-                try:
-                    save_cached_answer(course_id, question, clean_ans, formatted_sources)
-                except Exception:
-                    pass
+                if not is_negative_or_refusal_answer(clean_ans):
+                    _set_cached_answer_mem(cache_key, res_payload)
+                    try:
+                        save_cached_answer(course_id, question, clean_ans, formatted_sources)
+                    except Exception:
+                        pass
                 return res_payload
 
         # 6. Local Ollama fallback (only if Ollama daemon is actively running locally on port 11434)
@@ -376,11 +382,13 @@ def generate_answer(question: str, course_id: int) -> dict:
 
         clean_ans = sanitize_answer(answer)
         result = {"answer": clean_ans, "sources": formatted_sources}
-        _set_cached_answer_mem(cache_key, result)
-        try:
-            save_cached_answer(course_id, question, clean_ans, formatted_sources)
-        except Exception:
-            pass
+        from services.course_db_service import is_negative_or_refusal_answer
+        if not is_negative_or_refusal_answer(clean_ans):
+            _set_cached_answer_mem(cache_key, result)
+            try:
+                save_cached_answer(course_id, question, clean_ans, formatted_sources)
+            except Exception:
+                pass
         return result
     finally:
         if is_leader and event is not None:

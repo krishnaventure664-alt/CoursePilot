@@ -7,9 +7,9 @@ from services.reranker_service import rerank_results
 
 import threading
 
-DENSE_TOP_K = 30
-SPARSE_TOP_K = 30
-RRF_TOP_K = 10
+DENSE_TOP_K = 40
+SPARSE_TOP_K = 40
+RRF_TOP_K = 25
 FINAL_TOP_K = 6
 
 _chunk_details_cache: dict[str, dict] = {}
