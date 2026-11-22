@@ -59,13 +59,15 @@ def rerank_results(
     for result in search_results:
         pairs.append([query, result["text"]])
 
+    import torch
     with _reranker_inference_lock:
-        scores = reranker.compute_score(
-            pairs,
-            normalize=True,
-            max_length=256,
-            batch_size=16,
-        )
+        with torch.inference_mode():
+            scores = reranker.compute_score(
+                pairs,
+                normalize=True,
+                max_length=256,
+                batch_size=16,
+            )
 
     try:
         import torch

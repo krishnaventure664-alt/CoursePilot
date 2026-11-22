@@ -55,8 +55,10 @@ def __getattr__(name: str):
 
 def encode_text(text: str):
     model = get_bge_m3_model()
+    import torch
     with _inference_lock:
-        result = model.encode([text], batch_size=1)
+        with torch.inference_mode():
+            result = model.encode([text], batch_size=1)
 
     dense = result["dense_vecs"][0]
     sparse = result["lexical_weights"][0]
@@ -75,9 +77,11 @@ def encode_texts(texts):
         }
 
     model = get_bge_m3_model()
+    import torch
     # Batch size 16 keeps peak activation memory well under RTX 3050 VRAM limits
     with _inference_lock:
-        result = model.encode(texts, batch_size=16)
+        with torch.inference_mode():
+            result = model.encode(texts, batch_size=16)
 
     dense = result["dense_vecs"]
     sparse = result["lexical_weights"]

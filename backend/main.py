@@ -13,6 +13,7 @@ os.environ["MKL_NUM_THREADS"] = "4"
 os.environ["RAYON_NUM_THREADS"] = "4"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128")
 
 try:
     import torch
