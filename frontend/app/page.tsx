@@ -10,6 +10,7 @@ const DEFAULT_API_URL = (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:80
 
 function getInitialApiUrl(): string {
   if (typeof window !== "undefined") {
+    const isHttps = window.location.protocol === "https:";
     try {
       const params = new URLSearchParams(window.location.search);
       const serverParam = params.get("server");
@@ -23,7 +24,14 @@ function getInitialApiUrl(): string {
     }
     const saved = localStorage.getItem("coursepilot_api_url");
     if (saved && (saved.startsWith("http://") || saved.startsWith("https://"))) {
-      return saved.trim().replace(/\/+$/, "");
+      if (isHttps && (saved.includes("127.0.0.1") || saved.includes("localhost"))) {
+        localStorage.removeItem("coursepilot_api_url");
+      } else {
+        return saved.trim().replace(/\/+$/, "");
+      }
+    }
+    if (isHttps) {
+      return "";
     }
   }
   return DEFAULT_API_URL;
@@ -308,22 +316,46 @@ export default function Home() {
   useEffect(() => {
     let isMounted = true;
     async function autoResolveServer() {
-      const initUrl = getInitialApiUrl();
-      setApiUrl(initUrl);
-      setServerInput(initUrl);
+      const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
+      let currentUrl = getInitialApiUrl();
 
-      // 1. Try initial URL first
+      // If on HTTPS and currentUrl is empty or localhost, resolve from GitHub live_tunnel.txt immediately
+      if (!currentUrl || (isHttps && (currentUrl.includes("127.0.0.1") || currentUrl.includes("localhost")))) {
+        try {
+          const ghRes = await fetch(
+            "https://api.github.com/repos/krishnaventure664-alt/CoursePilot/contents/live_tunnel.txt?ref=main",
+            { headers: { Accept: "application/vnd.github.v3+json" } }
+          );
+          if (ghRes.ok) {
+            const ghData = await ghRes.json();
+            if (ghData.content) {
+              const liveUrl = atob(ghData.content.replace(/\s+/g, "")).trim().replace(/\/+$/, "");
+              if (liveUrl && (liveUrl.startsWith("http://") || liveUrl.startsWith("https://"))) {
+                currentUrl = liveUrl;
+                localStorage.setItem("coursepilot_api_url", liveUrl);
+              }
+            }
+          }
+        } catch {}
+      }
+
+      if (!currentUrl) {
+        currentUrl = DEFAULT_API_URL;
+      }
+
+      setApiUrl(currentUrl);
+      setServerInput(currentUrl);
+
+      // Verify connection to currentUrl
       try {
-        const res = await fetch(`${initUrl}/`, { headers: { "ngrok-skip-browser-warning": "true" } });
+        const res = await fetch(`${currentUrl}/`, { headers: { "ngrok-skip-browser-warning": "true" } });
         if (res.ok) {
           if (isMounted) setBackendStatus("connected");
           return;
         }
-      } catch {
-        // failed, continue to auto-sync
-      }
+      } catch {}
 
-      // 2. Auto-fetch latest live tunnel from GitHub
+      // Fallback: Check GitHub live_tunnel.txt again if not yet checked
       try {
         const ghRes = await fetch(
           "https://api.github.com/repos/krishnaventure664-alt/CoursePilot/contents/live_tunnel.txt?ref=main",
@@ -333,7 +365,7 @@ export default function Home() {
           const ghData = await ghRes.json();
           if (ghData.content) {
             const liveUrl = atob(ghData.content.replace(/\s+/g, "")).trim().replace(/\/+$/, "");
-            if (liveUrl && (liveUrl.startsWith("http://") || liveUrl.startsWith("https://")) && liveUrl !== initUrl) {
+            if (liveUrl && liveUrl !== currentUrl && (liveUrl.startsWith("http://") || liveUrl.startsWith("https://"))) {
               const testRes = await fetch(`${liveUrl}/`, { headers: { "ngrok-skip-browser-warning": "true" } });
               if (testRes.ok) {
                 if (isMounted) {
@@ -347,9 +379,7 @@ export default function Home() {
             }
           }
         }
-      } catch {
-        // GitHub lookup failed
-      }
+      } catch {}
 
       if (isMounted) setBackendStatus("disconnected");
     }

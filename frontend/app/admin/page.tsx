@@ -7,6 +7,7 @@ import { UserButton, useUser, useAuth } from "@clerk/nextjs";
 
 function getAdminApiUrl(): string {
   if (typeof window !== "undefined") {
+    const isHttps = window.location.protocol === "https:";
     try {
       const params = new URLSearchParams(window.location.search);
       const serverParam = params.get("server");
@@ -16,7 +17,14 @@ function getAdminApiUrl(): string {
     } catch {}
     const saved = localStorage.getItem("coursepilot_api_url");
     if (saved && (saved.startsWith("http://") || saved.startsWith("https://"))) {
-      return saved.trim().replace(/\/+$/, "");
+      if (isHttps && (saved.includes("127.0.0.1") || saved.includes("localhost"))) {
+        localStorage.removeItem("coursepilot_api_url");
+      } else {
+        return saved.trim().replace(/\/+$/, "");
+      }
+    }
+    if (isHttps) {
+      return "";
     }
   }
   return (process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000").trim().replace(/\/+$/, "");

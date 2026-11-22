@@ -19,11 +19,13 @@ def sync_tunnel_to_cloud(tunnel_url: str, root_dir: str):
             capture_output=True,
             timeout=10
         )
-        push_res = subprocess.run(["git", "push", "origin", "main"], cwd=root_dir, capture_output=True, text=True, timeout=20)
+        push_res = subprocess.run(["git", "push", "origin", "main"], cwd=root_dir, capture_output=True, text=True, timeout=25)
         if push_res.returncode == 0:
-            print("[SYNC] ✅ Live URL synced! Anyone visiting https://course-pilot-eight.vercel.app connects automatically.")
+            print("[SYNC] [OK] Live URL synced! Anyone visiting https://course-pilot-eight.vercel.app connects automatically.")
         else:
             print(f"[SYNC] Warning: Git push exited with code {push_res.returncode}")
+            if push_res.stderr:
+                print(f"[SYNC] Details: {push_res.stderr.strip()[:200]}")
     except Exception as e:
         print(f"[SYNC] Sync error (non-fatal): {e}")
 
@@ -71,8 +73,8 @@ def main():
                 sync_tunnel_to_cloud(tunnel_url, root_dir)
 
                 print("\n" + "-" * 70)
-                print(" Share this clean link with anyone or open on your phone:")
-                print(" 👉 https://course-pilot-eight.vercel.app")
+                print(" Open this clean link on your phone or share with anyone:")
+                print(" -> https://course-pilot-eight.vercel.app")
                 print("-" * 70)
                 print("Keep this terminal window OPEN while CoursePilot is being used.")
                 print("=" * 70 + "\n")
