@@ -48,7 +48,8 @@ type AdminMetrics = {
 export default function AdminPage() {
   const { user, isLoaded, isSignedIn } = useUser();
   const { getToken } = useAuth();
-  const API_URL = getAdminApiUrl();
+  const [apiUrl, setApiUrl] = useState<string>(getAdminApiUrl());
+  const API_URL = apiUrl;
 
   const [feedback, setFeedback] = useState<FeedbackItem[]>([]);
   const [metrics, setMetrics] = useState<AdminMetrics | null>(null);
@@ -97,6 +98,20 @@ export default function AdminPage() {
         setMetrics(mData);
       }
     } catch (err) {
+      try {
+        const ghRes = await fetch("https://api.github.com/repos/krishnaventure664-alt/CoursePilot/contents/live_tunnel.txt?ref=main");
+        if (ghRes.ok) {
+          const ghData = await ghRes.json();
+          if (ghData.content) {
+            const liveUrl = atob(ghData.content.replace(/\s+/g, "")).trim().replace(/\/+$/, "");
+            if (liveUrl && (liveUrl.startsWith("http://") || liveUrl.startsWith("https://")) && liveUrl !== apiUrl) {
+              setApiUrl(liveUrl);
+              localStorage.setItem("coursepilot_api_url", liveUrl);
+              return;
+            }
+          }
+        }
+      } catch {}
       console.error("Failed to load admin data:", err);
     } finally {
       setLoading(false);
@@ -109,7 +124,7 @@ export default function AdminPage() {
     } else if (isLoaded) {
       setLoading(false);
     }
-  }, [isLoaded, isSignedIn, isAdmin]);
+  }, [isLoaded, isSignedIn, isAdmin, apiUrl]);
 
   // Filter feedback items
   const filteredFeedback = useMemo(() => {

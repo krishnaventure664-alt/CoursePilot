@@ -306,16 +306,58 @@ export default function Home() {
   const API_URL = apiUrl;
 
   useEffect(() => {
-    const initUrl = getInitialApiUrl();
-    setApiUrl(initUrl);
-    setServerInput(initUrl);
+    let isMounted = true;
+    async function autoResolveServer() {
+      const initUrl = getInitialApiUrl();
+      setApiUrl(initUrl);
+      setServerInput(initUrl);
 
-    fetch(`${initUrl}/`, { headers: { "ngrok-skip-browser-warning": "true" } })
-      .then((res) => {
-        if (res.ok) setBackendStatus("connected");
-        else setBackendStatus("disconnected");
-      })
-      .catch(() => setBackendStatus("disconnected"));
+      // 1. Try initial URL first
+      try {
+        const res = await fetch(`${initUrl}/`, { headers: { "ngrok-skip-browser-warning": "true" } });
+        if (res.ok) {
+          if (isMounted) setBackendStatus("connected");
+          return;
+        }
+      } catch {
+        // failed, continue to auto-sync
+      }
+
+      // 2. Auto-fetch latest live tunnel from GitHub
+      try {
+        const ghRes = await fetch(
+          "https://api.github.com/repos/krishnaventure664-alt/CoursePilot/contents/live_tunnel.txt?ref=main",
+          { headers: { Accept: "application/vnd.github.v3+json" } }
+        );
+        if (ghRes.ok) {
+          const ghData = await ghRes.json();
+          if (ghData.content) {
+            const liveUrl = atob(ghData.content.replace(/\s+/g, "")).trim().replace(/\/+$/, "");
+            if (liveUrl && (liveUrl.startsWith("http://") || liveUrl.startsWith("https://")) && liveUrl !== initUrl) {
+              const testRes = await fetch(`${liveUrl}/`, { headers: { "ngrok-skip-browser-warning": "true" } });
+              if (testRes.ok) {
+                if (isMounted) {
+                  localStorage.setItem("coursepilot_api_url", liveUrl);
+                  setApiUrl(liveUrl);
+                  setServerInput(liveUrl);
+                  setBackendStatus("connected");
+                }
+                return;
+              }
+            }
+          }
+        }
+      } catch {
+        // GitHub lookup failed
+      }
+
+      if (isMounted) setBackendStatus("disconnected");
+    }
+
+    void autoResolveServer();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const handleConnectServer = async (newUrl: string) => {
