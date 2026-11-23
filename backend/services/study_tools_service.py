@@ -456,6 +456,10 @@ def _get_lecture_whole_transcript(chunks: list[tuple[float, float, str]], max_ch
     return "\n\n".join(lines)
 
 
+_notes_in_flight: dict[tuple[int, str], threading.Event] = {}
+_notes_in_flight_lock = threading.Lock()
+
+
 def get_or_generate_notes(course_id: int, video_id: str, force_refresh: bool = False) -> dict:
     """Return cached notes or generate comprehensive, un-truncated revision notes across the FULL lecture."""
     # Fast path: instant return from SQLite cache without disk/ChromaDB overhead
