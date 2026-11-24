@@ -161,31 +161,6 @@ def startup_self_heal():
 
     threading.Thread(target=_resume_worker, daemon=True).start()
 
-    def _prewarm_models_worker():
-        import time
-        # Non-blocking pause: lets FastAPI immediately bind port and serve frontend requests
-        time.sleep(1.0)
-        try:
-            from services.bge_m3_service import get_bge_m3_model
-            print("[Warmup] Pre-warming BGE-M3 embedding model in background...")
-            model = get_bge_m3_model()
-            # 1-token encode to allocate GPU fp16 memory and compile execution graph quietly
-            model.encode([""])
-            print("[Warmup] BGE-M3 ready: 0ms lag on first video indexing!")
-        except Exception as e:
-            print(f"[Warmup] Non-critical BGE-M3 warmup note: {e}")
-
-        try:
-            from services.reranker_service import get_reranker_model
-            print("[Warmup] Pre-warming BGE-Reranker model on GPU in background...")
-            reranker = get_reranker_model()
-            # 1-pair warm compute score to compile CUDA execution graph quietly
-            reranker.compute_score([["q", "t"]], max_length=64)
-            print("[Warmup] BGE-Reranker ready: 0ms lag on Ask AI Q&A answers!")
-        except Exception as e:
-            print(f"[Warmup] Non-critical Reranker warmup note: {e}")
-
-    threading.Thread(target=_prewarm_models_worker, daemon=True).start()
 
 
 @app.get("/")
